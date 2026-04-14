@@ -60,6 +60,17 @@ export const assetsApi = {
       .then((r) => r.data),
   delete: (assessmentId: string, assetId: string) =>
     api.delete(`/api/assessments/${assessmentId}/assets/${assetId}`),
+  csvTemplateUrl: (assessmentId: string) =>
+    `${BASE}/api/assessments/${assessmentId}/assets/csv-template`,
+  importCsv: (assessmentId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api
+      .post<Asset[]>(`/api/assessments/${assessmentId}/assets/csv-import`, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      .then((r) => r.data);
+  },
 };
 
 export const reportsApi = {

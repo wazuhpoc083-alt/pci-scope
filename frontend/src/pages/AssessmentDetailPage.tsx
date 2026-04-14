@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { PlusCircle, Download, RefreshCw } from "lucide-react";
+import { PlusCircle, Download, RefreshCw, Upload, FileDown } from "lucide-react";
 import { assessmentsApi, assetsApi, reportsApi, type Assessment, type Asset, type Report } from "../api";
 import AssetRow from "../components/AssetRow";
 import AddAssetForm from "../components/AddAssetForm";
@@ -20,6 +20,9 @@ export default function AssessmentDetailPage() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
   const [activeTab, setActiveTab] = useState<"assets" | "reports">("assets");
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   const loadAll = async () => {
     if (!id) return;
@@ -42,6 +45,29 @@ export default function AssessmentDetailPage() {
     await loadAll();
     setActiveTab("reports");
     setGeneratingReport(false);
+  };
+
+  const handleCsvImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !id) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      await assetsApi.importCsv(id, file);
+      await loadAll();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      if (detail && typeof detail === "object" && "errors" in detail) {
+        setImportError((detail as { errors: string[] }).errors.join("\n"));
+      } else if (typeof detail === "string") {
+        setImportError(detail);
+      } else {
+        setImportError("Import failed. Please check your CSV and try again.");
+      }
+    } finally {
+      setImporting(false);
+      if (csvInputRef.current) csvInputRef.current.value = "";
+    }
   };
 
   if (!assessment) return <p className="text-gray-500">Loading…</p>;
@@ -87,12 +113,33 @@ export default function AssessmentDetailPage() {
         ))}
         <div className="flex-1 flex justify-end items-center gap-2 pb-1">
           {activeTab === "assets" && (
-            <button
-              onClick={() => setShowAddForm(!showAddForm)}
-              className="flex items-center gap-1 text-sm text-brand-700 hover:text-brand-800 font-medium"
-            >
-              <PlusCircle className="w-4 h-4" /> Add Asset
-            </button>
+            <>
+              <a
+                href={id ? assetsApi.csvTemplateUrl(id) : "#"}
+                download="assets_template.csv"
+                className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800 font-medium"
+              >
+                <FileDown className="w-4 h-4" /> Template
+              </a>
+              <label className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800 font-medium cursor-pointer">
+                {importing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                Import CSV
+                <input
+                  ref={csvInputRef}
+                  type="file"
+                  accept=".csv"
+                  className="hidden"
+                  onChange={handleCsvImport}
+                  disabled={importing}
+                />
+              </label>
+              <button
+                onClick={() => setShowAddForm(!showAddForm)}
+                className="flex items-center gap-1 text-sm text-brand-700 hover:text-brand-800 font-medium"
+              >
+                <PlusCircle className="w-4 h-4" /> Add Asset
+              </button>
+            </>
           )}
           <button
             onClick={handleGenerateReport}
@@ -107,6 +154,18 @@ export default function AssessmentDetailPage() {
 
       {activeTab === "assets" && (
         <>
+          {importError && (
+            <div className="mb-4 bg-red-50 border border-red-200 rounded-xl p-4">
+              <p className="text-sm font-semibold text-red-700 mb-1">Import failed</p>
+              <pre className="text-xs text-red-600 whitespace-pre-wrap">{importError}</pre>
+              <button
+                onClick={() => setImportError(null)}
+                className="mt-2 text-xs text-red-500 underline"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           {showAddForm && id && (
             <AddAssetForm
               assessmentId={id}
