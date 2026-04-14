@@ -6,7 +6,6 @@ from sqlalchemy import (
     Boolean, Column, DateTime, Enum, ForeignKey,
     String, Text, JSON
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -36,7 +35,7 @@ class ScopeStatus(str, enum.Enum):
 class Assessment(Base):
     __tablename__ = "assessments"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
     name = Column(String(255), nullable=False)
     organization = Column(String(255), nullable=False)
     pci_dss_version = Column(String(10), default="4.0")
@@ -52,8 +51,8 @@ class Assessment(Base):
 class Asset(Base):
     __tablename__ = "assets"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    assessment_id = Column(UUID(as_uuid=False), ForeignKey("assessments.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    assessment_id = Column(String(36), ForeignKey("assessments.id"), nullable=False)
     name = Column(String(255), nullable=False)
     ip_address = Column(String(45), nullable=True)
     hostname = Column(String(255), nullable=True)
@@ -75,8 +74,8 @@ class Asset(Base):
 class ScopeReport(Base):
     __tablename__ = "scope_reports"
 
-    id = Column(UUID(as_uuid=False), primary_key=True, default=gen_uuid)
-    assessment_id = Column(UUID(as_uuid=False), ForeignKey("assessments.id"), nullable=False)
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    assessment_id = Column(String(36), ForeignKey("assessments.id"), nullable=False)
     generated_at = Column(DateTime(timezone=True), server_default=func.now())
     summary = Column(JSON, nullable=True)  # counts by scope_status
     report_json = Column(JSON, nullable=True)
