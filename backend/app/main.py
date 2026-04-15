@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.routers import assessments, assets, reports, firewall
@@ -17,6 +18,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    Catch-all handler so unhandled exceptions return a proper JSON 500 response
+    that travels through CORSMiddleware (instead of being swallowed by
+    Starlette's ServerErrorMiddleware which sends the response directly,
+    bypassing CORS header injection).
+    """
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 app.include_router(assessments.router, prefix="/api")
 app.include_router(assets.router, prefix="/api")

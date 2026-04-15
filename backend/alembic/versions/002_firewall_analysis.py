@@ -17,11 +17,18 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create enum type idempotently — avoids failure if a previous partial
-    # run already created the type but did not finish the table creation.
+    # Create enum type idempotently — PostgreSQL does not support
+    # "CREATE TYPE IF NOT EXISTS", so we use a DO block instead.
     op.execute(
-        "CREATE TYPE IF NOT EXISTS firewallvendor "
-        "AS ENUM ('fortinet', 'iptables', 'cisco_asa', 'palo_alto', 'unknown')"
+        """
+        DO $$
+        BEGIN
+            CREATE TYPE firewallvendor
+                AS ENUM ('fortinet', 'iptables', 'cisco_asa', 'palo_alto', 'unknown');
+        EXCEPTION
+            WHEN duplicate_object THEN NULL;
+        END $$;
+        """
     )
 
     op.create_table(
