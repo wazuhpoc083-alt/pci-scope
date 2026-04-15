@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import assessments, assets, reports
+from app.routers import assessments, assets, reports, firewall
 
 app = FastAPI(
     title="PCI DSS Scoping Tool API",
@@ -21,6 +21,7 @@ app.add_middleware(
 app.include_router(assessments.router, prefix="/api")
 app.include_router(assets.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
+app.include_router(firewall.router, prefix="/api")
 
 
 @app.get("/health")

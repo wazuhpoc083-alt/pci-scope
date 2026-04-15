@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel
-from app.models import AssetType, ScopeStatus
+from app.models import AssetType, FirewallVendor, ScopeStatus
 
 
 class AssessmentCreate(BaseModel):
@@ -81,6 +81,66 @@ class ReportOut(BaseModel):
     generated_at: datetime
     summary: Optional[dict]
     report_json: Optional[dict]
+
+    class Config:
+        from_attributes = True
+
+
+# ---------------------------------------------------------------------------
+# Firewall Analysis Schemas
+# ---------------------------------------------------------------------------
+
+class FirewallUploadOut(BaseModel):
+    id: str
+    assessment_id: str
+    filename: str
+    vendor: FirewallVendor
+    parse_errors: list
+    rule_count: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class FirewallRuleOut(BaseModel):
+    id: str
+    upload_id: str
+    policy_id: Optional[str]
+    name: Optional[str]
+    src_intf: Optional[str]
+    dst_intf: Optional[str]
+    src_addrs: list
+    dst_addrs: list
+    services: list
+    action: str
+    nat: bool
+    log_traffic: bool
+    comment: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+class AnalyzeRequest(BaseModel):
+    upload_id: str
+    cde_seeds: list[str] = []
+
+
+class AnswersRequest(BaseModel):
+    answers: dict[str, str]  # {question_id: answer_text}
+
+
+class FirewallAnalysisOut(BaseModel):
+    id: str
+    upload_id: str
+    assessment_id: str
+    cde_seeds: list
+    scope_nodes: list
+    questions: list
+    answers: dict
+    gap_findings: list
+    created_at: datetime
 
     class Config:
         from_attributes = True

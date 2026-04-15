@@ -4,7 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Enum, ForeignKey,
-    String, Text, JSON
+    Integer, String, Text, JSON
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -81,3 +81,88 @@ class ScopeReport(Base):
     report_json = Column(JSON, nullable=True)
 
     assessment = relationship("Assessment", back_populates="reports")
+
+
+# ---------------------------------------------------------------------------
+# Firewall Analysis Models
+# ---------------------------------------------------------------------------
+
+class FirewallVendor(str, enum.Enum):
+    fortinet = "fortinet"
+    iptables = "iptables"
+    cisco_asa = "cisco_asa"
+    palo_alto = "palo_alto"
+    unknown = "unknown"
+
+
+class GapSeverity(str, enum.Enum):
+    critical = "critical"
+    high = "high"
+    medium = "medium"
+    low = "low"
+    info = "info"
+
+
+class NodeScopeStatus(str, enum.Enum):
+    cde = "cde"
+    connected = "connected"
+    security_providing = "security_providing"
+    out_of_scope = "out_of_scope"
+    unknown = "unknown"
+
+
+class FirewallUpload(Base):
+    """Stores a parsed firewall config upload linked to an assessment."""
+    __tablename__ = "firewall_uploads"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    assessment_id = Column(String(36), ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False)
+    filename = Column(String(255), nullable=False)
+    vendor = Column(Enum(FirewallVendor), nullable=False, default=FirewallVendor.unknown)
+    raw_text = Column(Text, nullable=True)
+    parse_errors = Column(JSON, default=list)
+    rule_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    rules = relationship("FirewallRule", back_populates="upload", cascade="all, delete-orphan")
+    analyses = relationship("FirewallScopeAnalysis", back_populates="upload", cascade="all, delete-orphan")
+
+
+class FirewallRule(Base):
+    """Normalized firewall rule extracted from an uploaded config."""
+    __tablename__ = "firewall_rules"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    upload_id = Column(String(36), ForeignKey("firewall_uploads.id", ondelete="CASCADE"), nullable=False)
+    policy_id = Column(String(64), nullable=True)     # vendor rule id / sequence number
+    name = Column(String(255), nullable=True)
+    src_intf = Column(String(255), nullable=True)
+    dst_intf = Column(String(255), nullable=True)
+    src_addrs = Column(JSON, default=list)            # list of CIDR strings or "all"
+    dst_addrs = Column(JSON, default=list)
+    services = Column(JSON, default=list)             # list of "proto/port" strings or "ALL"
+    action = Column(String(16), nullable=False, default="permit")  # permit | deny
+    nat = Column(Boolean, default=False)
+    log_traffic = Column(Boolean, default=True)
+    comment = Column(Text, nullable=True)
+    raw = Column(JSON, nullable=True)                 # vendor-specific raw data
+
+    upload = relationship("FirewallUpload", back_populates="rules")
+
+
+class FirewallScopeAnalysis(Base):
+    """Tracks one scope analysis run: seeds, scope nodes, answers, gap findings."""
+    __tablename__ = "firewall_scope_analyses"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    upload_id = Column(String(36), ForeignKey("firewall_uploads.id", ondelete="CASCADE"), nullable=False)
+    assessment_id = Column(String(36), ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False)
+    cde_seeds = Column(JSON, default=list)            # list of CIDR strings user marked as CDE
+    scope_nodes = Column(JSON, default=list)          # list of {ip, scope_status, rule_ids}
+    questions = Column(JSON, default=list)            # list of {id, category, text, rule_id}
+    answers = Column(JSON, default=dict)              # {question_id: answer_text}
+    gap_findings = Column(JSON, default=list)         # list of GapFinding dicts
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    upload = relationship("FirewallUpload", back_populates="analyses")

@@ -81,3 +81,103 @@ export const reportsApi = {
   pdfUrl: (assessmentId: string, reportId: string) =>
     `${BASE}/api/assessments/${assessmentId}/reports/${reportId}/pdf`,
 };
+
+// ---------------------------------------------------------------------------
+// Firewall Analysis
+// ---------------------------------------------------------------------------
+
+export interface FirewallUpload {
+  id: string;
+  assessment_id: string;
+  filename: string;
+  vendor: string;
+  parse_errors: string[];
+  rule_count: number;
+  created_at: string;
+}
+
+export interface FirewallRule {
+  id: string;
+  upload_id: string;
+  policy_id: string | null;
+  name: string | null;
+  src_intf: string | null;
+  dst_intf: string | null;
+  src_addrs: string[];
+  dst_addrs: string[];
+  services: string[];
+  action: string;
+  nat: boolean;
+  log_traffic: boolean;
+  comment: string | null;
+}
+
+export interface ScopeNode {
+  ip: string;
+  scope_status: "cde" | "connected" | "security_providing" | "out_of_scope" | "unknown";
+  rule_ids: string[];
+  label: string;
+}
+
+export interface GapFinding {
+  id: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  requirement: string;
+  title: string;
+  description: string;
+  affected_rules: string[];
+  remediation: string;
+}
+
+export interface ScopeQuestion {
+  id: string;
+  category: "cde_id" | "ambiguity" | "segmentation" | "missing_rule";
+  text: string;
+  rule_id: string | null;
+  context: Record<string, unknown>;
+}
+
+export interface FirewallAnalysis {
+  id: string;
+  upload_id: string;
+  assessment_id: string;
+  cde_seeds: string[];
+  scope_nodes: ScopeNode[];
+  questions: ScopeQuestion[];
+  answers: Record<string, string>;
+  gap_findings: GapFinding[];
+  created_at: string;
+}
+
+export const firewallApi = {
+  upload: (assessmentId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api
+      .post<FirewallUpload>(`/api/assessments/${assessmentId}/firewall/upload`, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      })
+      .then((r) => r.data);
+  },
+  listUploads: (assessmentId: string) =>
+    api.get<FirewallUpload[]>(`/api/assessments/${assessmentId}/firewall/uploads`).then((r) => r.data),
+  listRules: (assessmentId: string, uploadId: string) =>
+    api
+      .get<FirewallRule[]>(`/api/assessments/${assessmentId}/firewall/uploads/${uploadId}/rules`)
+      .then((r) => r.data),
+  analyze: (assessmentId: string, uploadId: string, cdeSeeds: string[]) =>
+    api
+      .post<FirewallAnalysis>(`/api/assessments/${assessmentId}/firewall/analyze`, {
+        upload_id: uploadId,
+        cde_seeds: cdeSeeds,
+      })
+      .then((r) => r.data),
+  getAnalysis: (assessmentId: string) =>
+    api.get<FirewallAnalysis>(`/api/assessments/${assessmentId}/firewall/analysis`).then((r) => r.data),
+  submitAnswers: (assessmentId: string, answers: Record<string, string>) =>
+    api
+      .patch<FirewallAnalysis>(`/api/assessments/${assessmentId}/firewall/analysis/answers`, { answers })
+      .then((r) => r.data),
+  exportCsvUrl: (assessmentId: string) =>
+    `${BASE}/api/assessments/${assessmentId}/firewall/export/csv`,
+};

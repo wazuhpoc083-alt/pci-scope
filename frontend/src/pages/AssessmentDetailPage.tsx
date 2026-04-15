@@ -4,6 +4,7 @@ import { PlusCircle, Download, RefreshCw, Upload, FileDown } from "lucide-react"
 import { assessmentsApi, assetsApi, reportsApi, type Assessment, type Asset, type Report } from "../api";
 import AssetRow from "../components/AssetRow";
 import AddAssetForm from "../components/AddAssetForm";
+import FirewallAnalysis from "../components/firewall/FirewallAnalysis";
 
 const SCOPE_COLORS: Record<string, string> = {
   in_scope: "bg-red-100 text-red-700",
@@ -19,7 +20,7 @@ export default function AssessmentDetailPage() {
   const [reports, setReports] = useState<Report[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
   const [generatingReport, setGeneratingReport] = useState(false);
-  const [activeTab, setActiveTab] = useState<"assets" | "reports">("assets");
+  const [activeTab, setActiveTab] = useState<"assets" | "firewall" | "reports">("assets");
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -98,7 +99,7 @@ export default function AssessmentDetailPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 mb-4 border-b">
-        {(["assets", "reports"] as const).map((tab) => (
+        {(["assets", "firewall", "reports"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -108,7 +109,7 @@ export default function AssessmentDetailPage() {
                 : "border-transparent text-gray-500 hover:text-gray-700"
             }`}
           >
-            {tab}
+            {tab === "firewall" ? "Firewall Analysis" : tab}
           </button>
         ))}
         <div className="flex-1 flex justify-end items-center gap-2 pb-1">
@@ -188,6 +189,10 @@ export default function AssessmentDetailPage() {
             </div>
           )}
         </>
+      )}
+
+      {activeTab === "firewall" && id && (
+        <FirewallAnalysis assessmentId={id} />
       )}
 
       {activeTab === "reports" && (
