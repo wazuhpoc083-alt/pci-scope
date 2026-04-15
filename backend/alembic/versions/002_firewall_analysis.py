@@ -17,6 +17,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Create enum type idempotently — avoids failure if a previous partial
+    # run already created the type but did not finish the table creation.
+    op.execute(
+        "CREATE TYPE IF NOT EXISTS firewallvendor "
+        "AS ENUM ('fortinet', 'iptables', 'cisco_asa', 'palo_alto', 'unknown')"
+    )
+
     op.create_table(
         "firewall_uploads",
         sa.Column("id", sa.String(36), primary_key=True),
@@ -32,6 +39,7 @@ def upgrade() -> None:
             sa.Enum(
                 "fortinet", "iptables", "cisco_asa", "palo_alto", "unknown",
                 name="firewallvendor",
+                create_type=False,   # type already created above
             ),
             nullable=False,
             server_default="unknown",
