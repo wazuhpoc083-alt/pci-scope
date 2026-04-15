@@ -11,6 +11,6 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        sync: false          # set to your Vercel URL after deploy
+        value: "http://localhost:5173,https://pci-scope.vercel.app"
     healthCheckPath: /health
     autoDeploy: true
