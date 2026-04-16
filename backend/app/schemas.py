@@ -97,6 +97,7 @@ class FirewallUploadOut(BaseModel):
     vendor: FirewallVendor
     parse_errors: list
     rule_count: int
+    interfaces: dict = {}   # {intf_name: subnet_cidr}
     created_at: datetime
 
     class Config:
@@ -125,6 +126,7 @@ class FirewallRuleOut(BaseModel):
 class AnalyzeRequest(BaseModel):
     upload_id: str
     cde_seeds: list[str] = []
+    subnet_classifications: dict[str, str] = {}  # subnet_cidr → "cde"|"connected"|"out_of_scope"|"pending"
 
 
 class AnswersRequest(BaseModel):

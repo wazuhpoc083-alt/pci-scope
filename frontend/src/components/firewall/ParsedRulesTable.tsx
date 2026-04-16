@@ -78,22 +78,26 @@ export default function ParsedRulesTable({ upload, rules, onContinue }: Props) {
               <th className="px-3 py-2 text-left font-medium text-gray-500 w-12">#</th>
               <th className="px-3 py-2 text-left font-medium text-gray-500">Name</th>
               <th className="px-3 py-2 text-left font-medium text-gray-500">Src Intf</th>
-              <th className="px-3 py-2 text-left font-medium text-gray-500">Src Addr</th>
+              <th className="px-3 py-2 text-left font-medium text-gray-500">Src Intf Subnet</th>
+              <th className="px-3 py-2 text-left font-medium text-gray-500">Src Addr IP</th>
               <th className="px-3 py-2 text-left font-medium text-gray-500">Dst Intf</th>
-              <th className="px-3 py-2 text-left font-medium text-gray-500">Dst Addr</th>
+              <th className="px-3 py-2 text-left font-medium text-gray-500">Dst Addr IP</th>
               <th className="px-3 py-2 text-left font-medium text-gray-500">Services</th>
               <th className="px-3 py-2 text-left font-medium text-gray-500">Action</th>
               <th className="px-3 py-2 text-left font-medium text-gray-500">Comment</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100 bg-white">
-            {page_rules.map((r) => (
+            {page_rules.map((r) => {
+              const srcIntfSubnet = r.src_intf ? (upload.interfaces?.[r.src_intf] ?? "—") : "—";
+              return (
               <tr key={r.id} className="hover:bg-gray-50">
                 <td className="px-3 py-1.5 font-mono text-gray-400">{r.policy_id}</td>
                 <td className="px-3 py-1.5 text-gray-700 max-w-[120px] truncate" title={r.name ?? ""}>
                   {r.name || "—"}
                 </td>
                 <td className="px-3 py-1.5 font-mono text-gray-500">{r.src_intf || "—"}</td>
+                <td className="px-3 py-1.5 font-mono text-blue-600">{srcIntfSubnet}</td>
                 <td className="px-3 py-1.5">
                   <AddrList addrs={r.src_addrs} />
                 </td>
@@ -113,7 +117,8 @@ export default function ParsedRulesTable({ upload, rules, onContinue }: Props) {
                   {r.comment || "—"}
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {page_rules.length === 0 && (
               <tr>
                 <td colSpan={9} className="px-3 py-8 text-center text-gray-400">No rules match your search.</td>

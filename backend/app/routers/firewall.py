@@ -116,6 +116,7 @@ async def upload_firewall_config(
         raw_text=text,
         parse_errors=parsed.get("parse_errors", []),
         rule_count=len(parsed.get("rules", [])),
+        interfaces=parsed.get("interfaces", {}),
     )
     db.add(upload)
     db.flush()
@@ -223,8 +224,30 @@ def analyze(
         parsed = pf(upload.raw_text)
         interface_table = parsed.get("interfaces", {})
 
-    cde_seeds = payload.cde_seeds or []
+    # Derive CDE seeds: explicit list + any subnets the user classified as "cde"
+    cde_seeds = list(payload.cde_seeds or [])
+    for subnet, status in (payload.subnet_classifications or {}).items():
+        if status == "cde" and subnet not in cde_seeds:
+            cde_seeds.append(subnet)
+
     scope_nodes = classify_scope(rule_dicts, cde_seeds, interface_table)
+
+    # Apply user-provided overrides for subnets they explicitly classified
+    if payload.subnet_classifications:
+        import ipaddress as _ip
+        for node in scope_nodes:
+            node_cidr = node.get("ip", "")
+            override = payload.subnet_classifications.get(node_cidr)
+            if override and override != "cde":
+                # Map UI labels to internal status values
+                status_map = {
+                    "connected": "connected",
+                    "out_of_scope": "out_of_scope",
+                    "outofscope": "out_of_scope",
+                    "pending": "unknown",
+                }
+                node["scope_status"] = status_map.get(override, override)
+
     gap_result = run_gap_analysis(rule_dicts, cde_seeds, scope_nodes)
 
     # Upsert analysis record

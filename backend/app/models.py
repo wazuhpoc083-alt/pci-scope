@@ -122,6 +122,7 @@ class FirewallUpload(Base):
     raw_text = Column(Text, nullable=True)
     parse_errors = Column(JSON, default=list)
     rule_count = Column(Integer, default=0)
+    interfaces = Column(JSON, default=dict)   # {intf_name: subnet_cidr} from parsed config
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     rules = relationship("FirewallRule", back_populates="upload", cascade="all, delete-orphan")

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { firewallApi, type FirewallUpload, type FirewallRule, type FirewallAnalysis as AnalysisType } from "../../api";
 import UploadStep from "./UploadStep";
 import ParsedRulesTable from "./ParsedRulesTable";
-import SeedIPEntry from "./SeedIPEntry";
+import MarkSubnetsStep from "./MarkSubnetsStep";
 import ScopeSummary from "./ScopeSummary";
 import QuestionFlow from "./QuestionFlow";
 import GapFindings from "./GapFindings";
@@ -16,7 +16,7 @@ interface Props {
 const STEPS: { id: Step; label: string }[] = [
   { id: "upload", label: "Upload" },
   { id: "rules", label: "Review Rules" },
-  { id: "seeds", label: "Mark CDE" },
+  { id: "seeds", label: "Mark Subnets" },
   { id: "results", label: "Results" },
 ];
 
@@ -60,11 +60,11 @@ export default function FirewallAnalysis({ assessmentId }: Props) {
     setStep("rules");
   };
 
-  const handleAnalyze = async (seeds: string[]) => {
+  const handleAnalyze = async (seeds: string[], subnetClassifications?: Record<string, string>) => {
     if (!upload) return;
     setAnalyzing(true);
     try {
-      const result = await firewallApi.analyze(assessmentId, upload.id, seeds);
+      const result = await firewallApi.analyze(assessmentId, upload.id, seeds, subnetClassifications);
       setAnalysis(result);
       setStep("results");
       setActiveTab("scope");
@@ -149,8 +149,8 @@ export default function FirewallAnalysis({ assessmentId }: Props) {
         />
       )}
 
-      {step === "seeds" && (
-        <SeedIPEntry onAnalyze={handleAnalyze} loading={analyzing} />
+      {step === "seeds" && upload && (
+        <MarkSubnetsStep upload={upload} onAnalyze={handleAnalyze} loading={analyzing} />
       )}
 
       {step === "results" && analysis && upload && (

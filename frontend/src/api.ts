@@ -93,6 +93,7 @@ export interface FirewallUpload {
   vendor: string;
   parse_errors: string[];
   rule_count: number;
+  interfaces: Record<string, string>;  // interface_name → subnet_cidr
   created_at: string;
 }
 
@@ -165,11 +166,17 @@ export const firewallApi = {
     api
       .get<FirewallRule[]>(`/api/assessments/${assessmentId}/firewall/uploads/${uploadId}/rules`)
       .then((r) => r.data),
-  analyze: (assessmentId: string, uploadId: string, cdeSeeds: string[]) =>
+  analyze: (
+    assessmentId: string,
+    uploadId: string,
+    cdeSeeds: string[],
+    subnetClassifications?: Record<string, string>,
+  ) =>
     api
       .post<FirewallAnalysis>(`/api/assessments/${assessmentId}/firewall/analyze`, {
         upload_id: uploadId,
         cde_seeds: cdeSeeds,
+        subnet_classifications: subnetClassifications ?? {},
       })
       .then((r) => r.data),
   getAnalysis: (assessmentId: string) =>

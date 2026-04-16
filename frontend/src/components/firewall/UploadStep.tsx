@@ -1,6 +1,109 @@
 import { useRef, useState } from "react";
-import { Upload, RefreshCw, ShieldAlert } from "lucide-react";
+import { Upload, RefreshCw, ShieldAlert, FlaskConical } from "lucide-react";
 import { firewallApi, type FirewallUpload } from "../../api";
+
+// Minimal but representative FortiGate sample config for demo/testing
+const SAMPLE_FORTINET_CONFIG = `config system interface
+    edit "wan1"
+        set ip 203.0.113.1 255.255.255.0
+        set type physical
+    next
+    edit "internal"
+        set ip 10.10.10.1 255.255.255.0
+        set type physical
+    next
+    edit "dmz"
+        set ip 172.16.0.1 255.255.255.0
+        set type physical
+    next
+    edit "mgmt"
+        set ip 192.168.1.1 255.255.255.0
+        set type physical
+    next
+end
+config firewall address
+    edit "PCI_Servers"
+        set type ipmask
+        set subnet 10.10.10.0 255.255.255.0
+    next
+    edit "DMZ_Web"
+        set type ipmask
+        set subnet 172.16.0.0 255.255.255.0
+    next
+    edit "Internet"
+        set type ipmask
+        set subnet 0.0.0.0 0.0.0.0
+    next
+    edit "Mgmt_Net"
+        set type ipmask
+        set subnet 192.168.1.0 255.255.255.0
+    next
+end
+config firewall service custom
+    edit "HTTPS_ALT"
+        set protocol TCP
+        set tcp-portrange 8443
+    next
+end
+config firewall policy
+    edit 1
+        set name "Internet-to-DMZ"
+        set srcintf "wan1"
+        set dstintf "dmz"
+        set srcaddr "Internet"
+        set dstaddr "DMZ_Web"
+        set action accept
+        set service "HTTP" "HTTPS"
+        set logtraffic all
+        set comments "Allow inbound web traffic to DMZ"
+    next
+    edit 2
+        set name "DMZ-to-PCI"
+        set srcintf "dmz"
+        set dstintf "internal"
+        set srcaddr "DMZ_Web"
+        set dstaddr "PCI_Servers"
+        set action accept
+        set service "MYSQL"
+        set logtraffic all
+        set comments "DMZ web servers connecting to PCI DB"
+    next
+    edit 3
+        set name "PCI-to-Internet"
+        set srcintf "internal"
+        set dstintf "wan1"
+        set srcaddr "PCI_Servers"
+        set dstaddr "Internet"
+        set action deny
+        set logtraffic all
+        set comments "Block PCI servers from internet"
+    next
+    edit 4
+        set name "Mgmt-to-PCI"
+        set srcintf "mgmt"
+        set dstintf "internal"
+        set srcaddr "Mgmt_Net"
+        set dstaddr "PCI_Servers"
+        set action accept
+        set service "SSH" "HTTPS"
+        set logtraffic all
+        set nat disable
+        set comments "Admin access to PCI servers"
+    next
+    edit 5
+        set name "Mgmt-to-DMZ"
+        set srcintf "mgmt"
+        set dstintf "dmz"
+        set srcaddr "Mgmt_Net"
+        set dstaddr "DMZ_Web"
+        set action accept
+        set service "SSH" "HTTPS_ALT"
+        set logtraffic all
+        set comments "Admin access to DMZ web servers"
+    next
+end
+`;
+
 
 interface Props {
   assessmentId: string;
@@ -12,6 +115,12 @@ export default function UploadStep({ assessmentId, onUploaded }: Props) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const loadSampleConfig = async () => {
+    const blob = new Blob([SAMPLE_FORTINET_CONFIG], { type: "text/plain" });
+    const file = new File([blob], "sample-fortigate.conf", { type: "text/plain" });
+    await handleFile(file);
+  };
 
   const handleFile = async (file: File) => {
     setError(null);
@@ -80,6 +189,21 @@ export default function UploadStep({ assessmentId, onUploaded }: Props) {
           }}
         />
       </div>
+
+      <div className="flex items-center gap-3">
+        <hr className="flex-1 border-gray-200" />
+        <span className="text-xs text-gray-400">or</span>
+        <hr className="flex-1 border-gray-200" />
+      </div>
+
+      <button
+        onClick={loadSampleConfig}
+        disabled={uploading}
+        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 border border-dashed border-brand-300 rounded-lg text-sm font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 transition"
+      >
+        <FlaskConical className="w-4 h-4" />
+        Load sample FortiGate config (for testing)
+      </button>
 
       {error && (
         <div className="flex gap-2 items-start bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">
