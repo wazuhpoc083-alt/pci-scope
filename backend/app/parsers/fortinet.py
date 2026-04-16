@@ -40,10 +40,18 @@ def _parse_blocks(text: str) -> dict[str, Any]:
     Parse FortiGate config text into a nested dict of config sections.
     Top-level keys are config block names (e.g. "firewall policy").
     Values are dicts keyed by edit-id, each containing a dict of set values.
+
+    Nested ``config`` blocks inside an ``edit`` stanza (e.g. ``config
+    forticlient-winmac-settings`` inside ``edit "default"``) are stored as
+    child keys of the surrounding edit entry, and the outer ``current_edit``
+    context is correctly restored when the inner block closes.
     """
     lines = [l.rstrip() for l in text.splitlines()]
     stack: list[dict[str, Any]] = [{}]
     section_stack: list[str] = ["__root__"]
+    # Parallel stack: saves the current_edit value in effect when each config
+    # block was entered so it can be restored when that block ends.
+    edit_context_stack: list[str | None] = [None]
     current_edit: str | None = None
 
     i = 0
@@ -57,9 +65,17 @@ def _parse_blocks(text: str) -> dict[str, Any]:
         if line.startswith("config "):
             section_name = line[7:].strip()
             new_section: dict[str, Any] = {}
-            stack[-1].setdefault(section_name, {})
+            # If we are currently inside an edit block, the new sub-section
+            # should live under that edit's own dict, not as a sibling of other
+            # edit-ids in the parent section dict.
+            if current_edit is not None:
+                parent_dict = stack[-1][current_edit]
+            else:
+                parent_dict = stack[-1]
+            parent_dict.setdefault(section_name, {})
             stack.append(new_section)
             section_stack.append(section_name)
+            edit_context_stack.append(current_edit)  # save for restoration
             current_edit = None
 
         elif line.startswith("edit "):
@@ -69,6 +85,9 @@ def _parse_blocks(text: str) -> dict[str, Any]:
 
         elif line.startswith("set ") and current_edit is not None:
             parts = line[4:].split(None, 1)
+            if not parts:
+                i += 1
+                continue
             key = parts[0]
             val = parts[1].strip('"') if len(parts) > 1 else ""
             stack[-1][current_edit][key] = val
@@ -77,17 +96,28 @@ def _parse_blocks(text: str) -> dict[str, Any]:
             current_edit = None
 
         elif line == "end":
+            if len(stack) <= 1:
+                # Guard: never pop the root dict (unmatched 'end').
+                i += 1
+                continue
             finished = stack.pop()
             name = section_stack.pop()
+            saved_edit = edit_context_stack.pop()
+            # Restore the edit context that was active before this block opened.
+            current_edit = saved_edit
             if stack:
-                parent = stack[-1]
-                # merge finished block under its name
+                # Merge finished block under its name into the correct parent.
+                # If we restored an edit context, the parent is that edit's
+                # dict; otherwise it is the current section dict.
+                if current_edit is not None:
+                    parent = stack[-1][current_edit]
+                else:
+                    parent = stack[-1]
                 existing = parent.get(name)
                 if isinstance(existing, dict):
                     existing.update(finished)
                 else:
                     parent[name] = finished
-            current_edit = None
 
         i += 1
 

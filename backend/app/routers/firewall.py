@@ -106,7 +106,13 @@ async def upload_firewall_config(
         raise HTTPException(status_code=400, detail="Could not decode file as text")
 
     vendor = _detect_vendor(file.filename or "", text)
-    parsed = _parse_config(vendor, text)
+    try:
+        parsed = _parse_config(vendor, text)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Failed to parse firewall config: {exc}",
+        )
 
     upload = models.FirewallUpload(
         id=str(uuid.uuid4()),
