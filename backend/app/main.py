@@ -23,12 +23,24 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """
-    Catch-all handler so unhandled exceptions return a proper JSON 500 response
-    that travels through CORSMiddleware (instead of being swallowed by
-    Starlette's ServerErrorMiddleware which sends the response directly,
-    bypassing CORS header injection).
+    Catch-all handler so unhandled exceptions return a proper JSON 500 response.
+
+    We also inject CORS headers here directly, because in some Starlette
+    versions ServerErrorMiddleware can intercept the response before
+    CORSMiddleware has a chance to add the Allow-Origin header, causing
+    the browser to block the error response as a CORS violation.
     """
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    origin = request.headers.get("origin", "")
+    headers: dict[str, str] = {}
+    if origin in settings.cors_origins_list:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Vary"] = "Origin"
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+        headers=headers,
+    )
 
 app.include_router(assessments.router, prefix="/api")
 app.include_router(assets.router, prefix="/api")
