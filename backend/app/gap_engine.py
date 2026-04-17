@@ -1,8 +1,20 @@
 """
-PCI DSS v4.0 Gap Analysis Engine (Phase 1 — static checks).
+PCI DSS v4.0 Gap Analysis Engine (Phase 2 — static checks).
 
-Performs 5 core gap checks covering Requirement 1.2–1.5 and generates
+Performs 10 gap checks covering Requirement 1.2–1.5 and generates
 static clarifying questions based on rule patterns.
+
+Checks implemented:
+  1. Req 1.2.5 — Rules missing business-justification comments
+  2. Req 1.2.6 — Insecure protocols (Telnet, FTP, rsh, TFTP) permitted
+  3. Req 1.3.1 — All-service inbound access to CDE from internal networks
+  4. Req 1.3.2 — No explicit deny-all default policy
+  5. Req 1.3.3 — Wireless interface has direct permit to CDE
+  6. Req 1.3.5 — Overly broad any-source/any-service inbound permit rules
+  7. Req 1.4.2 — CDE systems have unrestricted outbound internet access
+  8. Req 1.4.3 — Anti-spoofing: private IPs permitted from external interfaces
+  9. Req 1.4.5 — CDE systems reachable from internet without NAT
+ 10. Req 1.3.3 — Direct internet access to CDE (GAP-INET-TO-CDE)
 
 Gap finding dict:
   {
@@ -87,6 +99,19 @@ def _extract_port(svc: str) -> str | None:
 
 
 _CARD_PROCESSING_PORTS = {"443", "8443", "4430", "8080", "8444", "9443"}
+
+_INSECURE_PORTS: dict[str, str] = {
+    "20": "FTP Data",
+    "21": "FTP Control",
+    "23": "Telnet",
+    "69": "TFTP",
+    "513": "rlogin",
+    "514": "rsh/rexec",
+}
+_INSECURE_SERVICE_NAMES = frozenset({"telnet", "ftp", "tftp", "rlogin", "rsh", "rexec"})
+
+_EXTERNAL_INTF_KEYWORDS = ("wan", "untrust", "external", "internet", "outside", "uplink", "inet")
+
 _KNOWN_PAYMENT_RANGES = [
     # Visa / MC / AMEX / PayPal (representative public ranges — not exhaustive)
     "208.43.0.0/16",
@@ -263,6 +288,224 @@ def _check_rule_comments(rules: list[dict]) -> list[dict]:
             ),
         })
     return findings
+
+
+def _is_external_intf(intf: str | None) -> bool:
+    if not intf:
+        return False
+    lower = intf.lower()
+    return any(kw in lower for kw in _EXTERNAL_INTF_KEYWORDS)
+
+
+def _is_insecure_service(svc: str) -> tuple[bool, str]:
+    """Return (True, label) if svc matches a known insecure port or service name."""
+    port = _extract_port(svc)
+    if port and port in _INSECURE_PORTS:
+        return True, f"{_INSECURE_PORTS[port]} (port {port})"
+    if svc.lower() in _INSECURE_SERVICE_NAMES:
+        return True, svc.upper()
+    return False, ""
+
+
+def _check_insecure_protocols(rules: list[dict]) -> list[dict]:
+    """Req 1.2.6 — Known insecure protocols (Telnet, FTP, rsh, TFTP) are permitted."""
+    findings = []
+    affected: list[str] = []
+    proto_found: set[str] = set()
+    for rule in rules:
+        if rule.get("action") != "permit":
+            continue
+        for svc in rule.get("services", []):
+            hit, label = _is_insecure_service(svc)
+            if hit:
+                affected.append(rule.get("policy_id", "?"))
+                proto_found.add(label)
+                break  # one match per rule
+    if affected:
+        protos = ", ".join(sorted(proto_found))
+        findings.append({
+            "id": "GAP-INSECURE-PROTO",
+            "severity": "high",
+            "requirement": "PCI DSS v4.0 Req 1.2.6",
+            "title": f"Insecure protocols permitted: {protos}",
+            "description": (
+                f"PCI DSS Req 1.2.6 requires that insecure services are not permitted unless "
+                f"additional security features mitigate the risk. Rules {', '.join(affected)} "
+                f"permit known insecure protocols: {protos}. These protocols transmit data "
+                "in cleartext and are prohibited in or adjacent to CDE environments."
+            ),
+            "affected_rules": affected,
+            "remediation": (
+                "Disable or block Telnet (23), FTP (20/21), TFTP (69), rsh (514), and "
+                "rlogin (513). Replace with encrypted alternatives: SSH (22) instead of "
+                "Telnet/rsh, SFTP/FTPS instead of FTP."
+            ),
+        })
+    return findings
+
+
+def _check_broad_internal_cde(rules: list[dict], cde_seeds: list[str]) -> list[dict]:
+    """Req 1.3.1 — Inbound access to CDE must be restricted to only what is necessary."""
+    if not cde_seeds:
+        return []
+    findings = []
+    affected: list[str] = []
+    for rule in rules:
+        if rule.get("action") != "permit":
+            continue
+        src_addrs = rule.get("src_addrs", [])
+        dst_addrs = rule.get("dst_addrs", [])
+        services = rule.get("services", [])
+        # Private/any source → CDE destination on any/all services
+        if (
+            any(_is_any(s) or _is_private(s) for s in src_addrs)
+            and not any(_is_internet(s) for s in src_addrs)  # internet→CDE caught by GAP-INET-TO-CDE
+            and _overlaps_any_cde(dst_addrs, cde_seeds)
+            and any(s.upper() in ("ALL", "ANY") for s in services)
+        ):
+            affected.append(rule.get("policy_id", "?"))
+    if affected:
+        findings.append({
+            "id": "GAP-BROAD-INTERNAL-CDE",
+            "severity": "medium",
+            "requirement": "PCI DSS v4.0 Req 1.3.1",
+            "title": "Unrestricted all-service access to CDE from internal networks",
+            "description": (
+                f"Rules {', '.join(affected)} permit traffic from internal or broad source "
+                "addresses to CDE systems on ALL services. PCI DSS Req 1.3.1 requires that "
+                "inbound traffic to the CDE is restricted to only what is necessary. "
+                "All-service access to CDE from internal networks violates least-privilege."
+            ),
+            "affected_rules": affected,
+            "remediation": (
+                "Replace all-service CDE inbound rules with specific port/protocol "
+                "restrictions. Only allow the exact services each CDE system needs "
+                "(e.g., tcp/443 for a payment web server, tcp/1433 for a database). "
+                "Segment access by source subnet."
+            ),
+        })
+    return findings
+
+
+def _check_anti_spoofing(rules: list[dict]) -> list[dict]:
+    """Req 1.4.3 — Anti-spoofing: inbound from external interfaces must not permit private source IPs."""
+    findings = []
+    affected: list[str] = []
+    for rule in rules:
+        if rule.get("action") != "permit":
+            continue
+        src_intf = rule.get("src_intf")
+        if not _is_external_intf(src_intf):
+            continue
+        src_addrs = rule.get("src_addrs", [])
+        # External interface but source is a private RFC1918 range — spoofing risk
+        if any(_is_private(s) for s in src_addrs):
+            affected.append(rule.get("policy_id", "?"))
+    if affected:
+        findings.append({
+            "id": "GAP-SPOOF",
+            "severity": "high",
+            "requirement": "PCI DSS v4.0 Req 1.4.3",
+            "title": "Anti-spoofing controls missing: private source IPs permitted from external interface",
+            "description": (
+                f"Rules {', '.join(affected)} permit traffic arriving on an external/WAN "
+                "interface with RFC1918 private source addresses. PCI DSS Req 1.4.3 requires "
+                "anti-spoofing measures to detect and block forged source IP addresses. "
+                "Allowing private IPs inbound from untrusted interfaces enables IP spoofing."
+            ),
+            "affected_rules": affected,
+            "remediation": (
+                "Add ingress ACL rules on all external/WAN interfaces to block traffic "
+                "with RFC1918 source addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16). "
+                "Consider implementing Unicast Reverse Path Forwarding (uRPF) on "
+                "internet-facing interfaces."
+            ),
+        })
+    return findings
+
+
+def _check_cde_no_nat(rules: list[dict], cde_seeds: list[str]) -> list[dict]:
+    """Req 1.4.5 — CDE IP addresses must not be disclosed to untrusted networks (NAT required)."""
+    if not cde_seeds:
+        return []
+    findings = []
+    affected: list[str] = []
+    for rule in rules:
+        if rule.get("action") != "permit":
+            continue
+        src_addrs = rule.get("src_addrs", [])
+        dst_addrs = rule.get("dst_addrs", [])
+        nat = rule.get("nat", True)  # assume NAT present unless explicitly false
+        if (
+            any(_is_internet(s) for s in src_addrs)
+            and _overlaps_any_cde(dst_addrs, cde_seeds)
+            and not nat
+        ):
+            affected.append(rule.get("policy_id", "?"))
+    if affected:
+        findings.append({
+            "id": "GAP-CDE-NO-NAT",
+            "severity": "medium",
+            "requirement": "PCI DSS v4.0 Req 1.4.5",
+            "title": "CDE systems reachable from internet without NAT (internal IPs exposed)",
+            "description": (
+                f"Rules {', '.join(affected)} permit inbound internet traffic directly to "
+                "CDE systems with NAT disabled. PCI DSS Req 1.4.5 requires that internal IP "
+                "addresses and routing information of CDE systems are not disclosed to "
+                "untrusted networks. Exposing real CDE IP addresses aids attacker reconnaissance."
+            ),
+            "affected_rules": affected,
+            "remediation": (
+                "Enable NAT/PAT so that CDE systems use RFC1918 private addresses internally "
+                "and only public-facing load balancer or proxy IPs are visible from the internet. "
+                "Ensure no static 1:1 NAT maps directly expose CDE IPs without additional controls."
+            ),
+        })
+    return findings
+
+
+def _check_wireless_cde_segment(rules: list[dict], cde_seeds: list[str]) -> list[dict]:
+    """Req 1.3.3 — NSC must be installed between wireless networks and the CDE."""
+    if not cde_seeds:
+        return []
+    # Collect wireless source interfaces
+    wireless_intfs: set[str] = set()
+    for rule in rules:
+        for key in ("src_intf", "dst_intf"):
+            intf = rule.get(key) or ""
+            if any(w in intf.lower() for w in ("wifi", "wlan", "wireless")):
+                wireless_intfs.add(intf)
+    if not wireless_intfs:
+        return []
+    # Flag any permit rule from wireless interface to CDE
+    affected: list[str] = []
+    for rule in rules:
+        if rule.get("action") != "permit":
+            continue
+        if rule.get("src_intf") in wireless_intfs:
+            if _overlaps_any_cde(rule.get("dst_addrs", []), cde_seeds):
+                affected.append(rule.get("policy_id", "?"))
+    if not affected:
+        return []
+    return [{
+        "id": "GAP-WIRELESS-CDE",
+        "severity": "critical",
+        "requirement": "PCI DSS v4.0 Req 1.3.3",
+        "title": "Wireless network has direct permitted access to CDE",
+        "description": (
+            f"Rules {', '.join(affected)} permit traffic from wireless interface(s) "
+            f"({', '.join(sorted(wireless_intfs))}) directly to CDE systems. "
+            "PCI DSS Req 1.3.3 requires that NSCs are installed between all wireless "
+            "networks and the CDE regardless of whether the wireless network is trusted."
+        ),
+        "affected_rules": affected,
+        "remediation": (
+            "Place wireless networks in a separate VLAN/segment with no direct permit "
+            "rules to CDE systems. Route wireless traffic through security controls "
+            "(IDS/IPS, next-gen firewall policy) before it can reach any CDE resource. "
+            "Add explicit deny rules from wireless interfaces to CDE subnets."
+        ),
+    }]
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +783,11 @@ def run_gap_analysis(
     findings.extend(_check_broad_inbound(rules))
     findings.extend(_check_cde_outbound(rules, cde_seeds))
     findings.extend(_check_rule_comments(rules))
+    findings.extend(_check_insecure_protocols(rules))
+    findings.extend(_check_broad_internal_cde(rules, cde_seeds))
+    findings.extend(_check_anti_spoofing(rules))
+    findings.extend(_check_cde_no_nat(rules, cde_seeds))
+    findings.extend(_check_wireless_cde_segment(rules, cde_seeds))
 
     if answers and questions:
         findings = refine_findings_with_answers(findings, questions, answers)
