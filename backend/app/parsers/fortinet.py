@@ -169,25 +169,31 @@ def _resolve_addresses(
     if name in addr_table:
         obj = addr_table[name]
         obj_type = obj.get("type", "ipmask")
+        fqdn = obj.get("fqdn", "")
         subnet = obj.get("subnet", "")
+        resolved_ip: str | None = None
         if subnet:
             parts = subnet.split()
             if len(parts) == 2:
                 prefix = _mask_to_prefix(parts[1])
                 try:
                     net = ipaddress.ip_network(f"{parts[0]}/{prefix}", strict=False)
-                    return [str(net)]
+                    resolved_ip = str(net)
                 except ValueError:
                     pass
             elif len(parts) == 1:
                 try:
                     net = ipaddress.ip_network(parts[0], strict=False)
-                    return [str(net)]
+                    resolved_ip = str(net)
                 except ValueError:
                     pass
-        fqdn = obj.get("fqdn", "")
         if fqdn:
+            # Pair FQDN with its resolved IP when available
+            if resolved_ip:
+                return [f"fqdn:{fqdn}|{resolved_ip}"]
             return [f"fqdn:{fqdn}"]
+        if resolved_ip:
+            return [resolved_ip]
         wildcard = obj.get("wildcard", "")
         if wildcard:
             return [f"wildcard:{wildcard}"]

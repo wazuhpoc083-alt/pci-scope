@@ -44,8 +44,14 @@ _SECURITY_PORTS = {
 
 def _parse_cidr(addr: str) -> ipaddress.IPv4Network | None:
     """Try to parse addr as an IPv4Network. Returns None for unresolvable names."""
-    if not addr or addr.startswith("fqdn:") or addr.startswith("wildcard:"):
+    if not addr or addr.startswith("wildcard:"):
         return None
+    if addr.startswith("fqdn:"):
+        # If combined fqdn|ip format, extract the IP portion
+        if "|" in addr:
+            addr = addr.split("|", 1)[1]
+        else:
+            return None
     try:
         return ipaddress.ip_network(addr, strict=False)
     except ValueError:

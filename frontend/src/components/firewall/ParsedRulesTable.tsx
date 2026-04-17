@@ -161,6 +161,19 @@ export default function ParsedRulesTable({ upload, rules, onContinue }: Props) {
   );
 }
 
+function formatAddr(a: string): string {
+  if (a === "0.0.0.0/0") return "any";
+  if (a.startsWith("fqdn:")) {
+    const rest = a.slice(5); // strip "fqdn:"
+    if (rest.includes("|")) {
+      const [host, ip] = rest.split("|", 2);
+      return `${host} / ${ip}`;
+    }
+    return rest;
+  }
+  return a;
+}
+
 function AddrList({ addrs }: { addrs: string[] }) {
   if (addrs.length === 0) return <span className="text-gray-400">—</span>;
   const show = addrs.slice(0, 2);
@@ -169,7 +182,7 @@ function AddrList({ addrs }: { addrs: string[] }) {
     <div className="flex flex-wrap gap-0.5">
       {show.map((a, i) => (
         <span key={i} className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded font-mono">
-          {a === "0.0.0.0/0" ? "any" : a}
+          {formatAddr(a)}
         </span>
       ))}
       {more > 0 && <span className="text-gray-400 text-xs">+{more}</span>}
