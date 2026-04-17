@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.database import get_db
-from app.gap_engine import run_gap_analysis
+from app.gap_engine import extract_answer_driven_cde_seeds, run_gap_analysis
 from app.parsers import parse_fortinet, parse_iptables
 from app.scope_engine import classify_scope
 
@@ -323,6 +323,62 @@ def submit_answers(
     current_answers = dict(analysis.answers or {})
     current_answers.update(payload.answers)
     analysis.answers = current_answers
+
+    # Re-run gap analysis incorporating the answers
+    existing_questions = list(analysis.questions or [])
+
+    # Check if any cde_id answers add new CDE seeds
+    extra_seeds = extract_answer_driven_cde_seeds(existing_questions, current_answers)
+    cde_seeds = list(analysis.cde_seeds or [])
+    for seed in extra_seeds:
+        if seed not in cde_seeds:
+            cde_seeds.append(seed)
+
+    # Fetch rules for the upload
+    rule_dicts = []
+    interface_table: dict = {}
+    upload = (
+        db.query(models.FirewallUpload)
+        .filter(models.FirewallUpload.id == analysis.upload_id)
+        .first()
+    )
+    if upload:
+        rules = db.query(models.FirewallRule).filter(models.FirewallRule.upload_id == upload.id).all()
+        rule_dicts = [
+            {
+                "policy_id": r.policy_id,
+                "name": r.name,
+                "src_intf": r.src_intf,
+                "dst_intf": r.dst_intf,
+                "src_addrs": r.src_addrs or [],
+                "dst_addrs": r.dst_addrs or [],
+                "services": r.services or [],
+                "action": r.action,
+                "nat": r.nat,
+                "log_traffic": r.log_traffic,
+                "comment": r.comment,
+            }
+            for r in rules
+        ]
+        if upload.raw_text and upload.vendor == models.FirewallVendor.fortinet:
+            from app.parsers.fortinet import parse_fortinet as pf
+            parsed = pf(upload.raw_text)
+            interface_table = parsed.get("interfaces", {})
+
+    # Re-classify scope (seeds may have changed due to confirmed CDE answers)
+    if rule_dicts:
+        scope_nodes = classify_scope(rule_dicts, cde_seeds, interface_table)
+        gap_result = run_gap_analysis(
+            rule_dicts,
+            cde_seeds,
+            scope_nodes,
+            answers=current_answers,
+            questions=existing_questions,
+        )
+        analysis.cde_seeds = cde_seeds
+        analysis.scope_nodes = scope_nodes
+        analysis.gap_findings = gap_result["gap_findings"]
+        # Keep existing questions (don't regenerate — answers reference them by id)
 
     db.commit()
     db.refresh(analysis)

@@ -410,6 +410,107 @@ def generate_questions(
 
 
 # ---------------------------------------------------------------------------
+# Answer processing helpers
+# ---------------------------------------------------------------------------
+
+_POSITIVE_WORDS = frozenset({"yes", "yep", "yeah", "correct", "true", "confirmed", "affirmative"})
+_UPSTREAM_DENY_WORDS = frozenset({"upstream", "acl", "layer", "separate", "external", "another"})
+
+
+def _answer_is_positive(text: str) -> bool:
+    """Return True when an answer begins with or contains a clear affirmative."""
+    lower = text.strip().lower()
+    first_word = lower.split()[0] if lower.split() else ""
+    return first_word in _POSITIVE_WORDS or any(w in lower for w in _POSITIVE_WORDS)
+
+
+def extract_answer_driven_cde_seeds(
+    questions: list[dict],
+    answers: dict[str, str],
+) -> list[str]:
+    """
+    Scan answered *cde_id* questions.  When the user's answer is clearly
+    affirmative, the destination subnet from that question's context is
+    treated as an additional confirmed CDE seed.
+    """
+    extra_seeds: list[str] = []
+    for q in questions:
+        qid = q.get("id", "")
+        answer = answers.get(qid, "").strip()
+        if not answer:
+            continue
+        if q.get("category") == "cde_id" and _answer_is_positive(answer):
+            dst = q.get("context", {}).get("dst")
+            if dst and isinstance(dst, str):
+                extra_seeds.append(dst)
+    return extra_seeds
+
+
+def refine_findings_with_answers(
+    findings: list[dict],
+    questions: list[dict],
+    answers: dict[str, str],
+) -> list[dict]:
+    """
+    Post-process gap findings using the user's answers to clarifying questions.
+
+    Current refinements:
+    - GAP-DENY-ALL: suppress when a *missing_rule* question is answered with
+      affirmation of an upstream / out-of-band deny-all.
+    - Any finding: annotate its description when the user answered an
+      *ambiguity* question that references the same rule(s).
+    """
+    # Build lookup: question_id → question
+    q_by_id = {q["id"]: q for q in questions}
+
+    # Determine whether user confirmed an upstream deny-all
+    upstream_deny_confirmed = False
+    for q in questions:
+        if q.get("category") != "missing_rule":
+            continue
+        answer = answers.get(q["id"], "").strip().lower()
+        if not answer:
+            continue
+        if _answer_is_positive(answer) or any(w in answer for w in _UPSTREAM_DENY_WORDS):
+            upstream_deny_confirmed = True
+            break
+
+    # Collect rule-level answers from ambiguity questions
+    rule_answer_notes: dict[str, str] = {}  # rule_id → answer text
+    for q in questions:
+        if q.get("category") != "ambiguity":
+            continue
+        rid = q.get("rule_id")
+        answer = answers.get(q["id"], "").strip()
+        if rid and answer:
+            rule_answer_notes[str(rid)] = answer
+
+    refined: list[dict] = []
+    for finding in findings:
+        fid = finding.get("id", "")
+
+        # Suppress deny-all gap when user confirmed an upstream control
+        if fid == "GAP-DENY-ALL" and upstream_deny_confirmed:
+            continue
+
+        # Annotate findings whose affected rules have been explained by the user
+        affected = finding.get("affected_rules", [])
+        notes = [rule_answer_notes[r] for r in affected if r in rule_answer_notes]
+        if notes:
+            annotated = dict(finding)
+            note_text = "; ".join(notes[:3])  # cap at 3 notes
+            annotated["description"] = (
+                finding["description"]
+                + f"\n\n**User context:** {note_text}"
+            )
+            refined.append(annotated)
+        else:
+            refined.append(finding)
+
+    return refined
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -417,9 +518,15 @@ def run_gap_analysis(
     rules: list[dict],
     cde_seeds: list[str],
     scope_nodes: list[dict],
+    answers: dict[str, str] | None = None,
+    questions: list[dict] | None = None,
 ) -> dict:
     """
     Run all gap checks and generate questions.
+
+    When *answers* and *questions* are provided (i.e. on a re-run after the
+    user answered clarifying questions), findings are post-processed to
+    incorporate the user's input.
 
     Returns:
       {
@@ -434,9 +541,12 @@ def run_gap_analysis(
     findings.extend(_check_cde_outbound(rules, cde_seeds))
     findings.extend(_check_rule_comments(rules))
 
-    questions = generate_questions(rules, scope_nodes, cde_seeds)
+    if answers and questions:
+        findings = refine_findings_with_answers(findings, questions, answers)
+
+    new_questions = generate_questions(rules, scope_nodes, cde_seeds)
 
     return {
         "gap_findings": findings,
-        "questions": questions,
+        "questions": new_questions,
     }
