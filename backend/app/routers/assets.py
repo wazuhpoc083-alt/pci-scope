@@ -6,7 +6,9 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app import models, schemas
+from app.auth import TokenClaims, get_current_claims
 from app.database import get_db
+from app.routers._helpers import get_assessment_for_claims
 
 router = APIRouter(prefix="/assessments/{assessment_id}/assets", tags=["assets"])
 
@@ -30,16 +32,13 @@ CSV_INSTRUCTIONS = [
 ]
 
 
-def _get_assessment_or_404(assessment_id: str, db: Session) -> models.Assessment:
-    assessment = db.query(models.Assessment).filter(models.Assessment.id == assessment_id).first()
-    if not assessment:
-        raise HTTPException(status_code=404, detail="Assessment not found")
-    return assessment
-
-
 @router.get("/", response_model=list[schemas.AssetOut])
-def list_assets(assessment_id: str, db: Session = Depends(get_db)):
-    _get_assessment_or_404(assessment_id, db)
+def list_assets(
+    assessment_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
     return (
         db.query(models.Asset)
         .filter(models.Asset.assessment_id == assessment_id)
@@ -49,8 +48,13 @@ def list_assets(assessment_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=schemas.AssetOut, status_code=201)
-def create_asset(assessment_id: str, payload: schemas.AssetCreate, db: Session = Depends(get_db)):
-    _get_assessment_or_404(assessment_id, db)
+def create_asset(
+    assessment_id: str,
+    payload: schemas.AssetCreate,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
     asset = models.Asset(assessment_id=assessment_id, **payload.model_dump())
     db.add(asset)
     db.commit()
@@ -63,8 +67,9 @@ def bulk_create_assets(
     assessment_id: str,
     payload: list[schemas.AssetCreate],
     db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
 ):
-    _get_assessment_or_404(assessment_id, db)
+    get_assessment_for_claims(assessment_id, db, claims)
     assets = [models.Asset(assessment_id=assessment_id, **a.model_dump()) for a in payload]
     db.add_all(assets)
     db.commit()
@@ -74,8 +79,12 @@ def bulk_create_assets(
 
 
 @router.get("/csv-template")
-def download_csv_template(assessment_id: str, db: Session = Depends(get_db)):
-    _get_assessment_or_404(assessment_id, db)
+def download_csv_template(
+    assessment_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
     buf = io.StringIO()
     writer = csv.writer(buf)
     for line in CSV_INSTRUCTIONS:
@@ -98,8 +107,9 @@ def import_csv(
     assessment_id: str,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
 ):
-    _get_assessment_or_404(assessment_id, db)
+    get_assessment_for_claims(assessment_id, db, claims)
 
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=422, detail="File must be a .csv")
@@ -121,12 +131,10 @@ def import_csv(
     for i, row in enumerate(reader, start=1):
         row_errors = []
 
-        # Required text fields
         for field in ("name", "ip_address", "hostname", "segmentation_notes", "justification"):
             if not row.get(field, "").strip():
                 row_errors.append(f"'{field}' is required")
 
-        # Enum fields
         asset_type = row.get("asset_type", "").strip()
         if asset_type not in VALID_ASSET_TYPES:
             row_errors.append(
@@ -141,7 +149,6 @@ def import_csv(
                 f"Must be one of: {', '.join(VALID_SCOPE_STATUSES)}"
             )
 
-        # Boolean fields
         for bool_field in ("is_cde", "stores_pan", "processes_pan", "transmits_pan"):
             val = row.get(bool_field, "").strip().lower()
             if val not in VALID_BOOLS:
@@ -187,7 +194,13 @@ def import_csv(
 
 
 @router.get("/{asset_id}", response_model=schemas.AssetOut)
-def get_asset(assessment_id: str, asset_id: str, db: Session = Depends(get_db)):
+def get_asset(
+    assessment_id: str,
+    asset_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
     asset = (
         db.query(models.Asset)
         .filter(models.Asset.id == asset_id, models.Asset.assessment_id == assessment_id)
@@ -204,7 +217,9 @@ def update_asset(
     asset_id: str,
     payload: schemas.AssetUpdate,
     db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
 ):
+    get_assessment_for_claims(assessment_id, db, claims)
     asset = (
         db.query(models.Asset)
         .filter(models.Asset.id == asset_id, models.Asset.assessment_id == assessment_id)
@@ -220,7 +235,13 @@ def update_asset(
 
 
 @router.delete("/{asset_id}", status_code=204)
-def delete_asset(assessment_id: str, asset_id: str, db: Session = Depends(get_db)):
+def delete_asset(
+    assessment_id: str,
+    asset_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
     asset = (
         db.query(models.Asset)
         .filter(models.Asset.id == asset_id, models.Asset.assessment_id == assessment_id)

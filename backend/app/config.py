@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     cors_origins: str = "http://localhost:5173,https://pci-scope.vercel.app"
+    # Raw bearer token for the hardcoded admin account.
+    # Set ADMIN_TOKEN=<secret> in the deployment environment.
+    admin_token: str = ""
 
     @property
     def cors_origins_list(self) -> list[str]:

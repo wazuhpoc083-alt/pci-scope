@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import assessments, assets, reports, firewall
+from app.routers import assessments, assets, reports, firewall, auth
 
 app = FastAPI(
     title="PCI DSS Scoping Tool API",
@@ -46,6 +46,7 @@ app.include_router(assessments.router, prefix="/api")
 app.include_router(assets.router, prefix="/api")
 app.include_router(reports.router, prefix="/api")
 app.include_router(firewall.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
 
 
 @app.get("/health")

@@ -18,14 +18,16 @@ import csv
 import io
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app import models, schemas
+from app.auth import TokenClaims, get_current_claims
 from app.database import get_db
 from app.gap_engine import extract_answer_driven_cde_seeds, run_gap_analysis
 from app.parsers import parse_cisco_asa, parse_fortinet, parse_iptables, parse_palo_alto
+from app.routers._helpers import get_assessment_for_claims
 from app.scope_engine import classify_scope
 
 router = APIRouter(
@@ -41,7 +43,6 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 # ---------------------------------------------------------------------------
 
 def _detect_vendor(filename: str, text: str) -> models.FirewallVendor:
-    """Heuristic vendor detection from filename and content."""
     fn = filename.lower()
     if "fortinet" in fn or "fortigate" in fn or "forti" in fn:
         return models.FirewallVendor.fortinet
@@ -51,20 +52,16 @@ def _detect_vendor(filename: str, text: str) -> models.FirewallVendor:
         return models.FirewallVendor.cisco_asa
     if "paloalto" in fn or "palo" in fn or "panorama" in fn:
         return models.FirewallVendor.palo_alto
-
-    # Content-based detection
     if "config firewall policy" in text or "set srcintf" in text:
         return models.FirewallVendor.fortinet
     if "-A INPUT" in text or "-A FORWARD" in text or "iptables" in text.lower():
         return models.FirewallVendor.iptables
     if "access-list" in text.lower() and "permit" in text.lower():
         return models.FirewallVendor.cisco_asa
-
     return models.FirewallVendor.unknown
 
 
 def _parse_config(vendor: models.FirewallVendor, text: str) -> dict:
-    """Route to the correct parser based on detected vendor."""
     if vendor == models.FirewallVendor.fortinet:
         return parse_fortinet(text)
     if vendor == models.FirewallVendor.iptables:
@@ -73,19 +70,7 @@ def _parse_config(vendor: models.FirewallVendor, text: str) -> dict:
         return parse_palo_alto(text)
     if vendor == models.FirewallVendor.cisco_asa:
         return parse_cisco_asa(text)
-    # Fallback: try Fortinet parser (most permissive)
     return parse_fortinet(text)
-
-
-# ---------------------------------------------------------------------------
-# Helper: get assessment or 404
-# ---------------------------------------------------------------------------
-
-def _get_assessment(assessment_id: str, db: Session) -> models.Assessment:
-    a = db.query(models.Assessment).filter(models.Assessment.id == assessment_id).first()
-    if not a:
-        raise HTTPException(status_code=404, detail="Assessment not found")
-    return a
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +82,9 @@ async def upload_firewall_config(
     assessment_id: str,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
 ):
-    _get_assessment(assessment_id, db)
+    get_assessment_for_claims(assessment_id, db, claims)
 
     content = await file.read()
     if len(content) > MAX_FILE_SIZE:
@@ -113,10 +99,7 @@ async def upload_firewall_config(
     try:
         parsed = _parse_config(vendor, text)
     except Exception as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Failed to parse firewall config: {exc}",
-        )
+        raise HTTPException(status_code=422, detail=f"Failed to parse firewall config: {exc}")
 
     upload = models.FirewallUpload(
         id=str(uuid.uuid4()),
@@ -131,7 +114,6 @@ async def upload_firewall_config(
     db.add(upload)
     db.flush()
 
-    # Store normalized rules
     for rule_data in parsed.get("rules", []):
         rule = models.FirewallRule(
             id=str(uuid.uuid4()),
@@ -157,8 +139,12 @@ async def upload_firewall_config(
 
 
 @router.get("/uploads", response_model=list[schemas.FirewallUploadOut])
-def list_uploads(assessment_id: str, db: Session = Depends(get_db)):
-    _get_assessment(assessment_id, db)
+def list_uploads(
+    assessment_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
     return (
         db.query(models.FirewallUpload)
         .filter(models.FirewallUpload.assessment_id == assessment_id)
@@ -168,7 +154,13 @@ def list_uploads(assessment_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/uploads/{upload_id}/rules", response_model=list[schemas.FirewallRuleOut])
-def list_rules(assessment_id: str, upload_id: str, db: Session = Depends(get_db)):
+def list_rules(
+    assessment_id: str,
+    upload_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
     upload = (
         db.query(models.FirewallUpload)
         .filter(
@@ -179,11 +171,7 @@ def list_rules(assessment_id: str, upload_id: str, db: Session = Depends(get_db)
     )
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
-    return (
-        db.query(models.FirewallRule)
-        .filter(models.FirewallRule.upload_id == upload_id)
-        .all()
-    )
+    return db.query(models.FirewallRule).filter(models.FirewallRule.upload_id == upload_id).all()
 
 
 # ---------------------------------------------------------------------------
@@ -195,8 +183,9 @@ def analyze(
     assessment_id: str,
     payload: schemas.AnalyzeRequest,
     db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
 ):
-    _get_assessment(assessment_id, db)
+    get_assessment_for_claims(assessment_id, db, claims)
 
     upload = (
         db.query(models.FirewallUpload)
@@ -227,13 +216,13 @@ def analyze(
         for r in rules
     ]
 
-    # Re-parse for interface table (needed for scope labeling)
     interface_table: dict = {}
-    if upload.raw_text and upload.vendor in (models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto, models.FirewallVendor.cisco_asa):
+    if upload.raw_text and upload.vendor in (
+        models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto, models.FirewallVendor.cisco_asa
+    ):
         parsed = _parse_config(upload.vendor, upload.raw_text)
         interface_table = parsed.get("interfaces", {})
 
-    # Derive CDE seeds: explicit list + any subnets the user classified as "cde"
     cde_seeds = list(payload.cde_seeds or [])
     for subnet, status in (payload.subnet_classifications or {}).items():
         if status == "cde" and subnet not in cde_seeds:
@@ -241,14 +230,11 @@ def analyze(
 
     scope_nodes = classify_scope(rule_dicts, cde_seeds, interface_table)
 
-    # Apply user-provided overrides for subnets they explicitly classified
     if payload.subnet_classifications:
-        import ipaddress as _ip
         for node in scope_nodes:
             node_cidr = node.get("ip", "")
             override = payload.subnet_classifications.get(node_cidr)
             if override and override != "cde":
-                # Map UI labels to internal status values
                 status_map = {
                     "connected": "connected",
                     "out_of_scope": "out_of_scope",
@@ -259,7 +245,6 @@ def analyze(
 
     gap_result = run_gap_analysis(rule_dicts, cde_seeds, scope_nodes)
 
-    # Upsert analysis record
     existing = (
         db.query(models.FirewallScopeAnalysis)
         .filter(
@@ -295,7 +280,12 @@ def analyze(
 
 
 @router.get("/analysis", response_model=schemas.FirewallAnalysisOut)
-def get_analysis(assessment_id: str, db: Session = Depends(get_db)):
+def get_analysis(
+    assessment_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
     analysis = (
         db.query(models.FirewallScopeAnalysis)
         .filter(models.FirewallScopeAnalysis.assessment_id == assessment_id)
@@ -312,7 +302,9 @@ def submit_answers(
     assessment_id: str,
     payload: schemas.AnswersRequest,
     db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
 ):
+    get_assessment_for_claims(assessment_id, db, claims)
     analysis = (
         db.query(models.FirewallScopeAnalysis)
         .filter(models.FirewallScopeAnalysis.assessment_id == assessment_id)
@@ -322,22 +314,17 @@ def submit_answers(
     if not analysis:
         raise HTTPException(status_code=404, detail="No analysis found")
 
-    # Merge new answers into existing
     current_answers = dict(analysis.answers or {})
     current_answers.update(payload.answers)
     analysis.answers = current_answers
 
-    # Re-run gap analysis incorporating the answers
     existing_questions = list(analysis.questions or [])
-
-    # Check if any cde_id answers add new CDE seeds
     extra_seeds = extract_answer_driven_cde_seeds(existing_questions, current_answers)
     cde_seeds = list(analysis.cde_seeds or [])
     for seed in extra_seeds:
         if seed not in cde_seeds:
             cde_seeds.append(seed)
 
-    # Fetch rules for the upload
     rule_dicts = []
     interface_table: dict = {}
     upload = (
@@ -363,11 +350,12 @@ def submit_answers(
             }
             for r in rules
         ]
-        if upload.raw_text and upload.vendor in (models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto, models.FirewallVendor.cisco_asa):
+        if upload.raw_text and upload.vendor in (
+            models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto, models.FirewallVendor.cisco_asa
+        ):
             parsed = _parse_config(upload.vendor, upload.raw_text)
             interface_table = parsed.get("interfaces", {})
 
-    # Re-classify scope (seeds may have changed due to confirmed CDE answers)
     if rule_dicts:
         scope_nodes = classify_scope(rule_dicts, cde_seeds, interface_table)
         gap_result = run_gap_analysis(
@@ -380,7 +368,6 @@ def submit_answers(
         analysis.cde_seeds = cde_seeds
         analysis.scope_nodes = scope_nodes
         analysis.gap_findings = gap_result["gap_findings"]
-        # Keep existing questions (don't regenerate — answers reference them by id)
 
     db.commit()
     db.refresh(analysis)
@@ -392,8 +379,12 @@ def submit_answers(
 # ---------------------------------------------------------------------------
 
 @router.get("/export/csv")
-def export_csv(assessment_id: str, db: Session = Depends(get_db)):
-    _get_assessment(assessment_id, db)
+def export_csv(
+    assessment_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
 
     analysis = (
         db.query(models.FirewallScopeAnalysis)
@@ -407,7 +398,6 @@ def export_csv(assessment_id: str, db: Session = Depends(get_db)):
     buf = io.StringIO()
     writer = csv.writer(buf)
 
-    # Section 1: Scope Nodes
     writer.writerow(["## Scope Classification"])
     writer.writerow(["IP / CIDR", "Scope Status", "Label", "Connected via Rules"])
     for node in analysis.scope_nodes or []:
@@ -420,7 +410,6 @@ def export_csv(assessment_id: str, db: Session = Depends(get_db)):
 
     writer.writerow([])
 
-    # Section 2: Gap Findings
     writer.writerow(["## Gap Analysis Findings"])
     writer.writerow(["Severity", "Requirement", "Title", "Affected Rules", "Remediation"])
     for finding in analysis.gap_findings or []:

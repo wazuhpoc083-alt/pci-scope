@@ -4,8 +4,31 @@ const BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 
 export const api = axios.create({ baseURL: BASE });
 
+// Inject auth token on every request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("auth_token");
+  if (token) {
+    config.headers = config.headers ?? {};
+    config.headers["Authorization"] = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// On 401, clear token and redirect to login
+api.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    if (err?.response?.status === 401) {
+      localStorage.removeItem("auth_token");
+      window.location.href = "/login";
+    }
+    return Promise.reject(err);
+  },
+);
+
 export interface Assessment {
   id: string;
+  tenant_id: string;
   name: string;
   organization: string;
   pci_dss_version: string;
@@ -83,6 +106,31 @@ export const reportsApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Auth API
+// ---------------------------------------------------------------------------
+
+export interface Tenant {
+  id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+}
+
+export const authApi = {
+  me: () => api.get("/api/auth/me").then((r) => r.data),
+  listTenants: () => api.get<Tenant[]>("/api/auth/tenants").then((r) => r.data),
+  createTenant: (data: { name: string; slug: string }) =>
+    api.post<Tenant>("/api/auth/tenants", data).then((r) => r.data),
+  issueToken: (tenant_id: string, expires_hours = 24) =>
+    api
+      .post<{ token: string; tenant_id: string; tenant_name: string; expires_hours: number }>(
+        "/api/auth/tokens",
+        { tenant_id, expires_hours },
+      )
+      .then((r) => r.data),
+};
+
+// ---------------------------------------------------------------------------
 // Firewall Analysis
 // ---------------------------------------------------------------------------
 
@@ -93,7 +141,7 @@ export interface FirewallUpload {
   vendor: string;
   parse_errors: string[];
   rule_count: number;
-  interfaces: Record<string, string>;  // interface_name → subnet_cidr
+  interfaces: Record<string, string>;
   created_at: string;
 }
 

@@ -4,18 +4,21 @@ from sqlalchemy.orm import Session
 import io
 
 from app import models, schemas
+from app.auth import TokenClaims, get_current_claims
 from app.database import get_db
 from app.report_builder import build_report_json, build_pdf
+from app.routers._helpers import get_assessment_for_claims
 
 router = APIRouter(prefix="/assessments/{assessment_id}/reports", tags=["reports"])
 
 
 @router.post("/", response_model=schemas.ReportOut, status_code=201)
-def generate_report(assessment_id: str, db: Session = Depends(get_db)):
-    assessment = db.query(models.Assessment).filter(models.Assessment.id == assessment_id).first()
-    if not assessment:
-        raise HTTPException(status_code=404, detail="Assessment not found")
-
+def generate_report(
+    assessment_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    assessment = get_assessment_for_claims(assessment_id, db, claims)
     assets = db.query(models.Asset).filter(models.Asset.assessment_id == assessment_id).all()
     report_json = build_report_json(assessment, assets)
 
@@ -39,7 +42,12 @@ def generate_report(assessment_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/", response_model=list[schemas.ReportOut])
-def list_reports(assessment_id: str, db: Session = Depends(get_db)):
+def list_reports(
+    assessment_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
     return (
         db.query(models.ScopeReport)
         .filter(models.ScopeReport.assessment_id == assessment_id)
@@ -49,7 +57,13 @@ def list_reports(assessment_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{report_id}/pdf")
-def download_report_pdf(assessment_id: str, report_id: str, db: Session = Depends(get_db)):
+def download_report_pdf(
+    assessment_id: str,
+    report_id: str,
+    db: Session = Depends(get_db),
+    claims: TokenClaims = Depends(get_current_claims),
+):
+    get_assessment_for_claims(assessment_id, db, claims)
     report = (
         db.query(models.ScopeReport)
         .filter(

@@ -5,6 +5,7 @@ from app.models import AssetType, FirewallVendor, ScopeStatus
 
 
 class AssessmentCreate(BaseModel):
+    tenant_id: Optional[str] = None  # admin only: override target tenant
     name: str
     organization: str
     pci_dss_version: str = "4.0"
@@ -13,6 +14,7 @@ class AssessmentCreate(BaseModel):
 
 class AssessmentOut(BaseModel):
     id: str
+    tenant_id: str
     name: str
     organization: str
     pci_dss_version: str
@@ -97,7 +99,7 @@ class FirewallUploadOut(BaseModel):
     vendor: FirewallVendor
     parse_errors: list
     rule_count: int
-    interfaces: dict = {}   # {intf_name: subnet_cidr}
+    interfaces: dict = {}
     created_at: datetime
 
     class Config:
@@ -126,11 +128,11 @@ class FirewallRuleOut(BaseModel):
 class AnalyzeRequest(BaseModel):
     upload_id: str
     cde_seeds: list[str] = []
-    subnet_classifications: dict[str, str] = {}  # subnet_cidr → "cde"|"connected"|"out_of_scope"|"pending"
+    subnet_classifications: dict[str, str] = {}
 
 
 class AnswersRequest(BaseModel):
-    answers: dict[str, str]  # {question_id: answer_text}
+    answers: dict[str, str]
 
 
 class FirewallAnalysisOut(BaseModel):
