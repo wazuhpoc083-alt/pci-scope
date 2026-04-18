@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { PlusCircle, Trash2, ArrowRight } from "lucide-react";
-import { assessmentsApi, type Assessment } from "../api";
+import { assessmentsApi, authApi, type Assessment, type Tenant } from "../api";
+import { useAuth } from "../AuthContext";
 
 export default function AssessmentsPage() {
+  const { claims } = useAuth();
   const [assessments, setAssessments] = useState<Assessment[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", organization: "", description: "" });
+  const [form, setForm] = useState({ name: "", organization: "", description: "", tenant_id: "" });
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const load = () =>
     assessmentsApi.list().then((data) => {
@@ -17,12 +21,23 @@ export default function AssessmentsPage() {
 
   useEffect(() => { load(); }, []);
 
+  useEffect(() => {
+    if (claims?.is_admin) {
+      authApi.listTenants().then(setTenants).catch(console.error);
+    }
+  }, [claims?.is_admin]);
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    await assessmentsApi.create(form);
-    setForm({ name: "", organization: "", description: "" });
-    setShowForm(false);
-    load();
+    setCreateError(null);
+    try {
+      await assessmentsApi.create(form);
+      setForm({ name: "", organization: "", description: "", tenant_id: "" });
+      setShowForm(false);
+      load();
+    } catch (err: any) {
+      setCreateError(err?.response?.data?.detail ?? "Failed to create assessment");
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -46,6 +61,26 @@ export default function AssessmentsPage() {
       {showForm && (
         <form onSubmit={handleCreate} className="bg-white border rounded-xl p-6 mb-6 shadow-sm space-y-4">
           <h2 className="font-semibold text-lg">New Assessment</h2>
+          {claims?.is_admin && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Tenant</label>
+              {tenants.length === 0 ? (
+                <p className="text-sm text-amber-600">No tenants yet. <Link to="/admin" className="underline">Create one first.</Link></p>
+              ) : (
+                <select
+                  required
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                  value={form.tenant_id}
+                  onChange={(e) => setForm({ ...form, tenant_id: e.target.value })}
+                >
+                  <option value="">Select a tenant…</option>
+                  {tenants.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Assessment Name</label>
@@ -77,6 +112,9 @@ export default function AssessmentsPage() {
               onChange={(e) => setForm({ ...form, description: e.target.value })}
             />
           </div>
+          {createError && (
+            <p className="text-sm text-red-600">{createError}</p>
+          )}
           <div className="flex gap-3">
             <button type="submit" className="bg-brand-700 text-white px-5 py-2 rounded-lg hover:bg-brand-800 text-sm transition">
               Create
