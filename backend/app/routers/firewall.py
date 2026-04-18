@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import get_db
 from app.gap_engine import extract_answer_driven_cde_seeds, run_gap_analysis
-from app.parsers import parse_fortinet, parse_iptables
+from app.parsers import parse_fortinet, parse_iptables, parse_palo_alto
 from app.scope_engine import classify_scope
 
 router = APIRouter(
@@ -69,6 +69,8 @@ def _parse_config(vendor: models.FirewallVendor, text: str) -> dict:
         return parse_fortinet(text)
     if vendor == models.FirewallVendor.iptables:
         return parse_iptables(text)
+    if vendor == models.FirewallVendor.palo_alto:
+        return parse_palo_alto(text)
     # Fallback: try Fortinet parser (most permissive)
     return parse_fortinet(text)
 
@@ -225,9 +227,8 @@ def analyze(
 
     # Re-parse for interface table (needed for scope labeling)
     interface_table: dict = {}
-    if upload.raw_text and upload.vendor == models.FirewallVendor.fortinet:
-        from app.parsers.fortinet import parse_fortinet as pf
-        parsed = pf(upload.raw_text)
+    if upload.raw_text and upload.vendor in (models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto):
+        parsed = _parse_config(upload.vendor, upload.raw_text)
         interface_table = parsed.get("interfaces", {})
 
     # Derive CDE seeds: explicit list + any subnets the user classified as "cde"
@@ -360,9 +361,8 @@ def submit_answers(
             }
             for r in rules
         ]
-        if upload.raw_text and upload.vendor == models.FirewallVendor.fortinet:
-            from app.parsers.fortinet import parse_fortinet as pf
-            parsed = pf(upload.raw_text)
+        if upload.raw_text and upload.vendor in (models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto):
+            parsed = _parse_config(upload.vendor, upload.raw_text)
             interface_table = parsed.get("interfaces", {})
 
     # Re-classify scope (seeds may have changed due to confirmed CDE answers)
