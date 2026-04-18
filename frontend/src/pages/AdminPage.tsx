@@ -14,13 +14,13 @@ export default function AdminPage() {
   const [issuing, setIssuing] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
-  if (!claims?.is_admin) {
-    return <Navigate to="/assessments" replace />;
-  }
-
   const load = () => authApi.listTenants().then(setTenants).catch(console.error);
 
   useEffect(() => { load(); }, []);
+
+  if (!claims?.is_admin) {
+    return <Navigate to="/assessments" replace />;
+  }
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();

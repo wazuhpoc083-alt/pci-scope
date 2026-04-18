@@ -13,7 +13,7 @@ export default function AssessmentsPage() {
     assessmentsApi.list().then((data) => {
       setAssessments(data);
       setLoading(false);
-    });
+    }).catch(() => setLoading(false));
 
   useEffect(() => { load(); }, []);
 

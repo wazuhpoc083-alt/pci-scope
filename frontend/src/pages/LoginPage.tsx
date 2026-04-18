@@ -14,8 +14,8 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      await login(token.trim());
-      navigate("/assessments", { replace: true });
+      const claims = await login(token.trim());
+      navigate(claims.is_admin ? "/admin" : "/assessments", { replace: true });
     } catch {
       setError("Invalid or expired token. Please try again.");
     } finally {

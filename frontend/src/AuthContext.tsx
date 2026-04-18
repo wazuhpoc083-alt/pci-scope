@@ -12,7 +12,7 @@ interface AuthState {
   token: string | null;
   claims: AuthClaims | null;
   loading: boolean;
-  login: (token: string) => Promise<void>;
+  login: (token: string) => Promise<AuthClaims>;
   logout: () => void;
 }
 
@@ -46,13 +46,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
   }, [token]);
 
-  const login = async (newToken: string) => {
+  const login = async (newToken: string): Promise<AuthClaims> => {
     const r = await api.get<AuthClaims>("/api/auth/me", {
       headers: { Authorization: `Bearer ${newToken}` },
     });
     localStorage.setItem("auth_token", newToken);
     setToken(newToken);
     setClaims(r.data);
+    return r.data;
   };
 
   const logout = () => {
