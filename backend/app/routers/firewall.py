@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import get_db
 from app.gap_engine import extract_answer_driven_cde_seeds, run_gap_analysis
-from app.parsers import parse_fortinet, parse_iptables, parse_palo_alto
+from app.parsers import parse_cisco_asa, parse_fortinet, parse_iptables, parse_palo_alto
 from app.scope_engine import classify_scope
 
 router = APIRouter(
@@ -71,6 +71,8 @@ def _parse_config(vendor: models.FirewallVendor, text: str) -> dict:
         return parse_iptables(text)
     if vendor == models.FirewallVendor.palo_alto:
         return parse_palo_alto(text)
+    if vendor == models.FirewallVendor.cisco_asa:
+        return parse_cisco_asa(text)
     # Fallback: try Fortinet parser (most permissive)
     return parse_fortinet(text)
 
@@ -227,7 +229,7 @@ def analyze(
 
     # Re-parse for interface table (needed for scope labeling)
     interface_table: dict = {}
-    if upload.raw_text and upload.vendor in (models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto):
+    if upload.raw_text and upload.vendor in (models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto, models.FirewallVendor.cisco_asa):
         parsed = _parse_config(upload.vendor, upload.raw_text)
         interface_table = parsed.get("interfaces", {})
 
@@ -361,7 +363,7 @@ def submit_answers(
             }
             for r in rules
         ]
-        if upload.raw_text and upload.vendor in (models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto):
+        if upload.raw_text and upload.vendor in (models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto, models.FirewallVendor.cisco_asa):
             parsed = _parse_config(upload.vendor, upload.raw_text)
             interface_table = parsed.get("interfaces", {})
 
