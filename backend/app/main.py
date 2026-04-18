@@ -1,14 +1,40 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 
 from app.config import settings
 from app.routers import assessments, assets, reports, firewall, auth
+
+
+def _run_migrations() -> None:
+    """Apply any pending Alembic migrations on startup.
+
+    This ensures the DB schema is always up-to-date regardless of how the
+    service is launched (e.g. if the startCommand in render.yaml is missing
+    the `alembic upgrade head` step, or the service was configured manually).
+    """
+    from alembic.config import Config
+    from alembic import command
+    import os
+
+    alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "..", "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", os.path.join(os.path.dirname(__file__), "..", "alembic"))
+    alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
+    command.upgrade(alembic_cfg, "head")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _run_migrations()
+    yield
+
 
 app = FastAPI(
     title="PCI DSS Scoping Tool API",
     description="Helps FSIs confirm PCI DSS scope per v4.0 Requirement 12.3",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
