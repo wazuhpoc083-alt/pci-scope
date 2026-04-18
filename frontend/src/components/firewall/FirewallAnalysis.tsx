@@ -6,6 +6,7 @@ import MarkSubnetsStep from "./MarkSubnetsStep";
 import ScopeSummary from "./ScopeSummary";
 import QuestionFlow from "./QuestionFlow";
 import GapFindings from "./GapFindings";
+import NetworkDiagram from "./NetworkDiagram";
 
 type Step = "upload" | "rules" | "seeds" | "results";
 
@@ -27,7 +28,7 @@ export default function FirewallAnalysis({ assessmentId }: Props) {
   const [analysis, setAnalysis] = useState<AnalysisType | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [submittingAnswers, setSubmittingAnswers] = useState(false);
-  const [activeTab, setActiveTab] = useState<"scope" | "questions" | "gaps">("scope");
+  const [activeTab, setActiveTab] = useState<"scope" | "diagram" | "questions" | "gaps">("scope");
 
   // On mount, try to restore any existing upload / analysis
   useEffect(() => {
@@ -172,9 +173,10 @@ export default function FirewallAnalysis({ assessmentId }: Props) {
 
           {/* Results tabs */}
           <div className="flex gap-1 border-b">
-            {(["scope", "questions", "gaps"] as const).map((tab) => {
+            {(["scope", "diagram", "questions", "gaps"] as const).map((tab) => {
               const labels: Record<string, string> = {
                 scope: `Scope Map (${analysis.scope_nodes.length})`,
+                diagram: "Network Diagram",
                 questions: `Questions (${analysis.questions.length})`,
                 gaps: `Gap Findings (${analysis.gap_findings.length})`,
               };
@@ -198,6 +200,9 @@ export default function FirewallAnalysis({ assessmentId }: Props) {
 
           {activeTab === "scope" && (
             <ScopeSummary nodes={analysis.scope_nodes} seeds={analysis.cde_seeds} />
+          )}
+          {activeTab === "diagram" && upload && (
+            <NetworkDiagram upload={upload} rules={rules} analysis={analysis} />
           )}
           {activeTab === "questions" && (
             <QuestionFlow
