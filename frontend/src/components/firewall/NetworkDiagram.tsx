@@ -11,7 +11,6 @@ interface Props {
   };
 }
 
-// Scope status → Mermaid style fill/stroke colours
 const ZONE_STYLE: Record<string, string> = {
   cde: "fill:#fee2e2,stroke:#dc2626,color:#7f1d1d",
   connected: "fill:#fed7aa,stroke:#ea580c,color:#7c2d12",
@@ -20,11 +19,70 @@ const ZONE_STYLE: Record<string, string> = {
   unknown: "fill:#f3f4f6,stroke:#9ca3af,color:#374151",
 };
 
-// Determine the worst-case scope status for a zone based on nodes labelled with that interface
-function zoneStatus(
-  intfName: string,
-  nodes: ScopeNode[]
-): keyof typeof ZONE_STYLE {
+const PORT_LABELS: Record<string, string> = {
+  "tcp/80": "HTTP",
+  "tcp/443": "HTTPS",
+  "tcp/8080": "HTTP",
+  "tcp/8443": "HTTPS",
+  "tcp/22": "SSH",
+  "tcp/23": "Telnet⚠",
+  "tcp/21": "FTP⚠",
+  "tcp/20": "FTP⚠",
+  "tcp/69": "TFTP⚠",
+  "udp/69": "TFTP⚠",
+  "tcp/3306": "MySQL",
+  "tcp/5432": "PostgreSQL",
+  "tcp/1433": "MSSQL",
+  "tcp/1521": "Oracle",
+  "tcp/389": "LDAP",
+  "tcp/636": "LDAPS",
+  "tcp/88": "Kerberos",
+  "udp/88": "Kerberos",
+  "udp/53": "DNS",
+  "tcp/53": "DNS",
+  "udp/123": "NTP",
+  "udp/514": "Syslog",
+  "tcp/514": "Syslog",
+  "tcp/6514": "Syslog",
+  "udp/161": "SNMP",
+  "udp/162": "SNMP",
+  "tcp/25": "SMTP",
+  "tcp/587": "SMTP",
+  "tcp/3389": "RDP",
+};
+
+function serviceCategory(services: string[]): string {
+  if (
+    services.length === 0 ||
+    services.some((s) => {
+      const u = s.toUpperCase();
+      return u === "ALL" || u === "ANY";
+    })
+  ) {
+    return "All Traffic";
+  }
+  const unique = [...new Set(services.map((s) => s.toLowerCase()))];
+  const labels = new Set<string>();
+  unique.forEach((svc) => {
+    const known = PORT_LABELS[svc];
+    if (known) {
+      labels.add(known);
+    } else {
+      const portMatch = svc.match(/\/(\d+(?:-\d+)?)$/);
+      if (portMatch) labels.add(`port ${portMatch[1]}`);
+      else labels.add(svc.toUpperCase());
+    }
+  });
+  const arr = Array.from(labels);
+  if (arr.length <= 3) return arr.join(", ");
+  return `${arr.slice(0, 2).join(", ")} +${arr.length - 2} more`;
+}
+
+function isExternalZone(name: string): boolean {
+  return /^(external|internet|wan|untrust|outside|dmz.?ext|inet)/i.test(name);
+}
+
+function zoneStatus(intfName: string, nodes: ScopeNode[]): keyof typeof ZONE_STYLE {
   const priority = ["cde", "connected", "security_providing", "out_of_scope", "unknown"] as const;
   const matching = nodes.filter(
     (n) => n.label && n.label.toLowerCase() === intfName.toLowerCase()
@@ -36,7 +94,6 @@ function zoneStatus(
   return "unknown";
 }
 
-// Sanitise an interface name to a valid Mermaid node id
 function nodeId(name: string) {
   return name.replace(/[^a-zA-Z0-9_]/g, "_");
 }
@@ -46,41 +103,97 @@ function buildMermaid(
   rules: FirewallRule[],
   nodes: ScopeNode[]
 ): string {
-  const zones = Object.entries(interfaces);
-
-  if (zones.length === 0) {
-    // Fallback: derive zones from rule interfaces
+  // Build full zone list
+  let allZones = Object.entries(interfaces);
+  if (allZones.length === 0) {
     const intfs = new Set<string>();
     rules.forEach((r) => {
       if (r.src_intf && r.src_intf !== "any") intfs.add(r.src_intf);
       if (r.dst_intf && r.dst_intf !== "any") intfs.add(r.dst_intf);
     });
-    intfs.forEach((i) => zones.push([i, ""]));
+    intfs.forEach((i) => allZones.push([i, ""]));
   }
 
-  // Aggregate edges: key = "srcIntf→dstIntf", value = {permit: string[], deny: string[]}
-  type EdgeInfo = { permit: string[]; deny: string[] };
+  // Map zone name → scope status
+  const zoneStatusMap = new Map<string, string>();
+  allZones.forEach(([name]) => {
+    zoneStatusMap.set(name, zoneStatus(name, nodes));
+  });
+
+  // Collect permit-only edges; skip OOS/unknown ↔ OOS/unknown (irrelevant for PCI DSS)
+  type EdgeInfo = { services: string[] };
   const edges = new Map<string, EdgeInfo>();
 
   rules.forEach((r) => {
+    if (r.action !== "permit") return;
     const src = r.src_intf;
     const dst = r.dst_intf;
     if (!src || !dst || src === "any" || dst === "any") return;
+
+    const srcStatus = zoneStatusMap.get(src) ?? "unknown";
+    const dstStatus = zoneStatusMap.get(dst) ?? "unknown";
+    const irrelevant = (s: string) => s === "out_of_scope" || s === "unknown";
+    if (irrelevant(srcStatus) && irrelevant(dstStatus)) return;
+
     const key = `${src}→${dst}`;
-    if (!edges.has(key)) edges.set(key, { permit: [], deny: [] });
-    const info = edges.get(key)!;
-    const svcLabel = r.services.slice(0, 2).join(", ") + (r.services.length > 2 ? "…" : "");
-    if (r.action === "deny") {
-      info.deny.push(svcLabel || "ALL");
-    } else {
-      info.permit.push(svcLabel || "ANY");
+    if (!edges.has(key)) edges.set(key, { services: [] });
+    edges.get(key)!.services.push(...r.services);
+  });
+
+  // Active zones: appear in an edge OR are cde/connected/security_providing
+  const activeZoneNames = new Set<string>();
+  edges.forEach((_, key) => {
+    const [src, dst] = key.split("→");
+    activeZoneNames.add(src);
+    activeZoneNames.add(dst);
+  });
+  allZones.forEach(([name]) => {
+    const status = zoneStatusMap.get(name) ?? "unknown";
+    if (status === "cde" || status === "connected" || status === "security_providing") {
+      activeZoneNames.add(name);
     }
   });
 
+  const activeZones = allZones.filter(([name]) => activeZoneNames.has(name));
+
+  // Group by PCI tier
+  const tiers: Record<string, Array<[string, string]>> = {
+    cde: [],
+    connected: [],
+    security_providing: [],
+    other: [],
+  };
+  activeZones.forEach(([name, cidr]) => {
+    const status = zoneStatusMap.get(name) ?? "unknown";
+    if (status === "cde") tiers.cde.push([name, cidr]);
+    else if (status === "connected") tiers.connected.push([name, cidr]);
+    else if (status === "security_providing") tiers.security_providing.push([name, cidr]);
+    else tiers.other.push([name, cidr]);
+  });
+
+  const TIER_LABELS: Record<string, string> = {
+    cde: "CDE — Cardholder Data Environment",
+    connected: "Connected to CDE",
+    security_providing: "Security and Management",
+  };
+
   const lines: string[] = ["flowchart LR"];
 
-  // Node definitions
-  zones.forEach(([name, cidr]) => {
+  // Subgraphs for CDE, Connected, Security tiers
+  (["cde", "connected", "security_providing"] as const).forEach((tier) => {
+    const zones = tiers[tier];
+    if (zones.length === 0) return;
+    lines.push(`  subgraph ${tier}_tier["${TIER_LABELS[tier]}"]`);
+    zones.forEach(([name, cidr]) => {
+      const id = nodeId(name);
+      const label = cidr ? `${name}\\n${cidr}` : name;
+      lines.push(`    ${id}["${label}"]`);
+    });
+    lines.push("  end");
+  });
+
+  // Flat nodes for out-of-scope / unknown zones
+  tiers.other.forEach(([name, cidr]) => {
     const id = nodeId(name);
     const label = cidr ? `${name}\\n${cidr}` : name;
     lines.push(`  ${id}["${label}"]`);
@@ -88,30 +201,36 @@ function buildMermaid(
 
   lines.push("");
 
-  // Edge definitions
+  // Emit edges; track critical external→CDE connections
+  let edgeIndex = 0;
+  const criticalEdgeIndices: number[] = [];
+
   edges.forEach((info, key) => {
     const [src, dst] = key.split("→");
     const sid = nodeId(src);
     const did = nodeId(dst);
+    const label = serviceCategory(info.services);
+    const dstStatus = zoneStatusMap.get(dst) ?? "unknown";
+    const isCritical = isExternalZone(src) && dstStatus === "cde";
 
-    if (info.permit.length > 0) {
-      const label = info.permit.slice(0, 2).join(", ") + (info.permit.length > 2 ? "…" : "");
-      lines.push(`  ${sid} -->|"✓ ${label}"| ${did}`);
-    }
-    if (info.deny.length > 0) {
-      const label = info.deny.slice(0, 2).join(", ") + (info.deny.length > 2 ? "…" : "");
-      lines.push(`  ${sid} -. "✗ ${label}" .-> ${did}`);
-    }
+    lines.push(`  ${sid} -->|"${label}"| ${did}`);
+    if (isCritical) criticalEdgeIndices.push(edgeIndex);
+    edgeIndex++;
   });
 
   lines.push("");
 
-  // Style nodes by scope status
-  zones.forEach(([name]) => {
+  // Style active zone nodes by scope status
+  activeZones.forEach(([name]) => {
     const id = nodeId(name);
-    const status = zoneStatus(name, nodes);
+    const status = zoneStatusMap.get(name) ?? "unknown";
     const style = ZONE_STYLE[status] ?? ZONE_STYLE.unknown;
     lines.push(`  style ${id} ${style}`);
+  });
+
+  // Red thick border on critical external→CDE edges
+  criticalEdgeIndices.forEach((idx) => {
+    lines.push(`  linkStyle ${idx} stroke:#dc2626,stroke-width:3px`);
   });
 
   return lines.join("\n");
@@ -152,25 +271,30 @@ export default function NetworkDiagram({ upload, rules, analysis }: Props) {
       <div>
         <h2 className="text-lg font-semibold">Network Diagram</h2>
         <p className="text-sm text-gray-500 mt-1">
-          Zone-level view derived from firewall interfaces and policy rules. Colours reflect PCI DSS scope classification.
+          Simplified PCI DSS segmentation view — zones grouped by scope tier, permit traffic only.
+          Red edges indicate direct external access to CDE.
         </p>
       </div>
 
       {/* Legend */}
       <div className="flex flex-wrap gap-3 text-xs">
         {[
-          { status: "cde", label: "CDE", bg: "bg-red-100", text: "text-red-700" },
-          { status: "connected", label: "Connected to CDE", bg: "bg-orange-100", text: "text-orange-700" },
-          { status: "security_providing", label: "Security Zone", bg: "bg-blue-100", text: "text-blue-700" },
-          { status: "out_of_scope", label: "Out of Scope", bg: "bg-green-100", text: "text-green-700" },
-          { status: "unknown", label: "Unclassified", bg: "bg-gray-100", text: "text-gray-600" },
+          { label: "CDE", bg: "bg-red-100", text: "text-red-700" },
+          { label: "Connected to CDE", bg: "bg-orange-100", text: "text-orange-700" },
+          { label: "Security Zone", bg: "bg-blue-100", text: "text-blue-700" },
+          { label: "Out of Scope", bg: "bg-green-100", text: "text-green-700" },
+          { label: "Unclassified", bg: "bg-gray-100", text: "text-gray-600" },
         ].map(({ label, bg, text }) => (
-          <span key={label} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full font-medium ${bg} ${text}`}>
+          <span
+            key={label}
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full font-medium ${bg} ${text}`}
+          >
             {label}
           </span>
         ))}
         <span className="inline-flex items-center gap-1 px-2 py-1 text-gray-500">
-          ✓ = permit &nbsp; ✗ = deny
+          → permitted &nbsp;{" "}
+          <span className="font-semibold text-red-600">→</span> external→CDE (critical)
         </span>
       </div>
 
@@ -221,7 +345,9 @@ export default function NetworkDiagram({ upload, rules, analysis }: Props) {
                       <td className="px-3 py-2 font-mono font-medium">{name}</td>
                       <td className="px-3 py-2 font-mono text-gray-500">{cidr || "—"}</td>
                       <td className="px-3 py-2">
-                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cfg[status] ?? cfg.unknown}`}>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-xs font-medium ${cfg[status] ?? cfg.unknown}`}
+                        >
                           {status.replace(/_/g, " ")}
                         </span>
                       </td>

@@ -19,7 +19,7 @@ from app.gap_engine import (
 
 
 # ---------------------------------------------------------------------------
-# Fixtures / helpers
+# Fixtures / helpers...
 # ---------------------------------------------------------------------------
 
 def _make_question(qid: str, category: str, context: dict | None = None, rule_id: str | None = None) -> dict:
