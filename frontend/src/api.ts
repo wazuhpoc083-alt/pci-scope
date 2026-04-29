@@ -166,6 +166,7 @@ export interface ScopeNode {
   scope_status: "cde" | "connected" | "security_providing" | "out_of_scope" | "unknown";
   rule_ids: string[];
   label: string;
+  name?: string;
 }
 
 export interface GapFinding {

@@ -163,7 +163,7 @@ def _resolve_addresses(
         for m in members:
             m = m.strip('"')
             result.extend(_resolve_addresses(m, addr_table, grp_table, _depth + 1))
-        return result or [name]
+        return result or []
 
     # Check address object
     if name in addr_table:
@@ -197,9 +197,17 @@ def _resolve_addresses(
         wildcard = obj.get("wildcard", "")
         if wildcard:
             return [f"wildcard:{wildcard}"]
+        # Handle iprange type (start-ip / end-ip)
+        start_ip = obj.get("start-ip", "")
+        if start_ip:
+            try:
+                net = ipaddress.ip_network(f"{start_ip}/32", strict=False)
+                return [str(net)]
+            except ValueError:
+                pass
 
-    # Fall back to name as-is (unresolvable)
-    return [name]
+    # Unresolvable — return empty list so callers skip this entry
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +309,47 @@ def _build_interface_table(root: dict[str, Any]) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Address label map
+# ---------------------------------------------------------------------------
+
+def _build_addr_label_map(
+    addr_table: dict[str, Any],
+    grp_table: dict[str, Any],
+) -> dict[str, str]:
+    """
+    Build {canonical_key: object_name} for display in scope summary.
+    canonical_key is a normalized CIDR string or "fqdn:name" for bare FQDNs.
+    Uses setdefault so the first (most specific) object name wins.
+    """
+    result: dict[str, str] = {}
+
+    for name, obj in addr_table.items():
+        if not isinstance(obj, dict):
+            continue
+        for resolved in _resolve_addresses(name, addr_table, grp_table):
+            if resolved.startswith("wildcard:"):
+                continue
+            if resolved.startswith("fqdn:"):
+                if "|" in resolved:
+                    ip_part = resolved.split("|", 1)[1]
+                    try:
+                        net = ipaddress.ip_network(ip_part, strict=False)
+                        result.setdefault(str(net), name)
+                    except ValueError:
+                        pass
+                else:
+                    result.setdefault(resolved, name)
+            else:
+                try:
+                    net = ipaddress.ip_network(resolved, strict=False)
+                    result.setdefault(str(net), name)
+                except ValueError:
+                    pass
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Main parser
 # ---------------------------------------------------------------------------
 
@@ -389,5 +438,6 @@ def parse_fortinet(text: str) -> dict:
         "rules": rules,
         "interfaces": interface_table,
         "addresses": {k: v for k, v in addr_table.items() if isinstance(v, dict)},
+        "addr_label_map": _build_addr_label_map(addr_table, grp_table),
         "parse_errors": errors,
     }

@@ -217,18 +217,20 @@ def analyze(
     ]
 
     interface_table: dict = {}
+    addr_label_map: dict = {}
     if upload.raw_text and upload.vendor in (
         models.FirewallVendor.fortinet, models.FirewallVendor.palo_alto, models.FirewallVendor.cisco_asa
     ):
         parsed = _parse_config(upload.vendor, upload.raw_text)
         interface_table = parsed.get("interfaces", {})
+        addr_label_map = parsed.get("addr_label_map", {})
 
     cde_seeds = list(payload.cde_seeds or [])
     for subnet, status in (payload.subnet_classifications or {}).items():
         if status == "cde" and subnet not in cde_seeds:
             cde_seeds.append(subnet)
 
-    scope_nodes = classify_scope(rule_dicts, cde_seeds, interface_table)
+    scope_nodes = classify_scope(rule_dicts, cde_seeds, interface_table, addr_label_map)
 
     if payload.subnet_classifications:
         for node in scope_nodes:
@@ -327,6 +329,7 @@ def submit_answers(
 
     rule_dicts = []
     interface_table: dict = {}
+    addr_label_map: dict = {}
     upload = (
         db.query(models.FirewallUpload)
         .filter(models.FirewallUpload.id == analysis.upload_id)
@@ -355,9 +358,10 @@ def submit_answers(
         ):
             parsed = _parse_config(upload.vendor, upload.raw_text)
             interface_table = parsed.get("interfaces", {})
+            addr_label_map = parsed.get("addr_label_map", {})
 
     if rule_dicts:
-        scope_nodes = classify_scope(rule_dicts, cde_seeds, interface_table)
+        scope_nodes = classify_scope(rule_dicts, cde_seeds, interface_table, addr_label_map)
         gap_result = run_gap_analysis(
             rule_dicts,
             cde_seeds,

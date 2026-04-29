@@ -100,9 +100,18 @@ export default function ScopeSummary({ nodes, seeds }: Props) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 bg-white">
-                      {items.map((node, i) => (
+                      {items.map((node, i) => {
+                        const isFqdn = node.ip.startsWith("fqdn:");
+                        const displayIp = isFqdn ? node.ip.slice(5) : node.ip;
+                        const showName = !isFqdn && node.name && node.name !== node.ip;
+                        return (
                         <tr key={i} className="hover:bg-gray-50">
-                          <td className="px-3 py-1.5 font-mono font-medium">{node.ip}</td>
+                          <td className="px-3 py-1.5 font-mono font-medium">
+                            {displayIp}
+                            {showName && (
+                              <span className="ml-1 text-gray-400 font-normal text-xs non-italic">({node.name})</span>
+                            )}
+                          </td>
                           <td className="px-3 py-1.5 text-gray-500">{node.label || "—"}</td>
                           <td className="px-3 py-1.5 text-gray-400">
                             {node.rule_ids.length > 0
@@ -111,7 +120,8 @@ export default function ScopeSummary({ nodes, seeds }: Props) {
                               : "—"}
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
