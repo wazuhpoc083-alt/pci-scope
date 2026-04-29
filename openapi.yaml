@@ -1,0 +1,1537 @@
+openapi: "3.0.3"
+info:
+  title: PCI DSS Scoping Tool API
+  description: |
+    Helps Financial Service Institutions (FSIs) confirm PCI DSS scope per v4.0 Requirement 12.3.
+
+    ## Authentication
+
+    Two token types are supported:
+
+    - **Admin token** — a static secret set via the `ADMIN_TOKEN` environment variable. Passed as
+      `Authorization: Bearer <ADMIN_TOKEN>`. Grants full access including tenant management and
+      cross-tenant data visibility.
+    - **Tenant JWT** — a short-lived HS256 JWT issued by `POST /api/auth/tokens`. Scoped to a single
+      tenant. Grants access to that tenant's assessments, assets, reports, and firewall analyses only.
+
+    All endpoints except `GET /health` require a bearer token.
+  version: "0.1.0"
+  contact:
+    name: Engineering
+
+servers:
+  - url: https://api.example.com
+    description: Production
+  - url: http://localhost:8000
+    description: Local development
+
+tags:
+  - name: health
+    description: Service liveness probe
+  - name: auth
+    description: Identity, tenant management, and token issuance
+  - name: assessments
+    description: PCI DSS scoping assessment lifecycle
+  - name: assets
+    description: Assets (servers, databases, network devices) within an assessment
+  - name: reports
+    description: Scope reports — generation and PDF download
+  - name: firewall
+    description: Firewall config upload, rule parsing, scope classification, and gap analysis
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Admin static token or tenant-scoped HS256 JWT.
+        Obtain a tenant JWT via `POST /api/auth/tokens` (admin only).
+
+  schemas:
+    # ------------------------------------------------------------------
+    # Enumerations
+    # ------------------------------------------------------------------
+    AssetType:
+      type: string
+      enum: [server, database, network_device, workstation, cloud_service, other]
+
+    ScopeStatus:
+      type: string
+      enum: [in_scope, connected, out_of_scope, pending]
+
+    FirewallVendor:
+      type: string
+      enum: [fortinet, iptables, cisco_asa, palo_alto, unknown]
+
+    GapSeverity:
+      type: string
+      enum: [critical, high, medium, low, info]
+
+    # ------------------------------------------------------------------
+    # Auth
+    # ------------------------------------------------------------------
+    TenantOut:
+      type: object
+      required: [id, name, slug, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    TenantCreate:
+      type: object
+      required: [name, slug]
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+          description: URL-safe unique identifier for the tenant
+
+    TokenRequest:
+      type: object
+      required: [tenant_id]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+        expires_hours:
+          type: integer
+          default: 24
+          minimum: 1
+          description: Token TTL in hours
+
+    TokenResponse:
+      type: object
+      required: [token, tenant_id, tenant_name, expires_hours]
+      properties:
+        token:
+          type: string
+          description: Signed JWT to use as bearer token
+        tenant_id:
+          type: string
+          format: uuid
+        tenant_name:
+          type: string
+        expires_hours:
+          type: integer
+
+    MeResponse:
+      type: object
+      required: [role, is_admin]
+      properties:
+        role:
+          type: string
+          enum: [admin, viewer]
+        is_admin:
+          type: boolean
+        tenant_id:
+          type: string
+          format: uuid
+          nullable: true
+        tenant_name:
+          type: string
+          nullable: true
+
+    # ------------------------------------------------------------------
+    # Assessments
+    # ------------------------------------------------------------------
+    AssessmentCreate:
+      type: object
+      required: [name, organization]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Admin only — target tenant. Required when caller is admin.
+        name:
+          type: string
+        organization:
+          type: string
+        pci_dss_version:
+          type: string
+          default: "4.0"
+        description:
+          type: string
+          nullable: true
+
+    AssessmentOut:
+      type: object
+      required: [id, tenant_id, name, organization, pci_dss_version, is_finalized, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        organization:
+          type: string
+        pci_dss_version:
+          type: string
+        description:
+          type: string
+          nullable: true
+        is_finalized:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    # ------------------------------------------------------------------
+    # Assets
+    # ------------------------------------------------------------------
+    AssetCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        ip_address:
+          type: string
+          nullable: true
+        hostname:
+          type: string
+          nullable: true
+        asset_type:
+          $ref: "#/components/schemas/AssetType"
+          default: server
+        scope_status:
+          $ref: "#/components/schemas/ScopeStatus"
+          default: pending
+        is_cde:
+          type: boolean
+          default: false
+          description: True if asset is in the Cardholder Data Environment
+        stores_pan:
+          type: boolean
+          default: false
+        processes_pan:
+          type: boolean
+          default: false
+        transmits_pan:
+          type: boolean
+          default: false
+        segmentation_notes:
+          type: string
+          nullable: true
+        justification:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+          default: []
+
+    AssetUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        ip_address:
+          type: string
+          nullable: true
+        hostname:
+          type: string
+          nullable: true
+        asset_type:
+          $ref: "#/components/schemas/AssetType"
+        scope_status:
+          $ref: "#/components/schemas/ScopeStatus"
+        is_cde:
+          type: boolean
+        stores_pan:
+          type: boolean
+        processes_pan:
+          type: boolean
+        transmits_pan:
+          type: boolean
+        segmentation_notes:
+          type: string
+          nullable: true
+        justification:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+
+    AssetOut:
+      type: object
+      required:
+        - id, assessment_id, name, asset_type, scope_status, is_cde,
+          stores_pan, processes_pan, transmits_pan, tags, created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        assessment_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        ip_address:
+          type: string
+          nullable: true
+        hostname:
+          type: string
+          nullable: true
+        asset_type:
+          $ref: "#/components/schemas/AssetType"
+        scope_status:
+          $ref: "#/components/schemas/ScopeStatus"
+        is_cde:
+          type: boolean
+        stores_pan:
+          type: boolean
+        processes_pan:
+          type: boolean
+        transmits_pan:
+          type: boolean
+        segmentation_notes:
+          type: string
+          nullable: true
+        justification:
+          type: string
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+
+    # ------------------------------------------------------------------
+    # Reports
+    # ------------------------------------------------------------------
+    ReportSummary:
+      type: object
+      properties:
+        in_scope:
+          type: integer
+        connected:
+          type: integer
+        out_of_scope:
+          type: integer
+        pending:
+          type: integer
+        total:
+          type: integer
+
+    ReportOut:
+      type: object
+      required: [id, assessment_id, generated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        assessment_id:
+          type: string
+          format: uuid
+        generated_at:
+          type: string
+          format: date-time
+        summary:
+          $ref: "#/components/schemas/ReportSummary"
+          nullable: true
+        report_json:
+          type: object
+          nullable: true
+          description: Full structured report payload
+
+    # ------------------------------------------------------------------
+    # Firewall
+    # ------------------------------------------------------------------
+    FirewallUploadOut:
+      type: object
+      required: [id, assessment_id, filename, vendor, parse_errors, rule_count, interfaces, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        assessment_id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        vendor:
+          $ref: "#/components/schemas/FirewallVendor"
+        parse_errors:
+          type: array
+          items: {}
+          description: Non-fatal parse warnings encountered during config ingestion
+        rule_count:
+          type: integer
+        interfaces:
+          type: object
+          description: Detected interface-to-network mappings (vendor-specific)
+        created_at:
+          type: string
+          format: date-time
+
+    FirewallRuleOut:
+      type: object
+      required: [id, upload_id, action, nat, log_traffic]
+      properties:
+        id:
+          type: string
+          format: uuid
+        upload_id:
+          type: string
+          format: uuid
+        policy_id:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        src_intf:
+          type: string
+          nullable: true
+        dst_intf:
+          type: string
+          nullable: true
+        src_addrs:
+          type: array
+          items:
+            type: string
+        dst_addrs:
+          type: array
+          items:
+            type: string
+        services:
+          type: array
+          items:
+            type: string
+        action:
+          type: string
+          enum: [permit, deny, drop]
+        nat:
+          type: boolean
+        log_traffic:
+          type: boolean
+        comment:
+          type: string
+          nullable: true
+
+    AnalyzeRequest:
+      type: object
+      required: [upload_id]
+      properties:
+        upload_id:
+          type: string
+          format: uuid
+          description: ID of the previously uploaded firewall config to analyze
+        cde_seeds:
+          type: array
+          items:
+            type: string
+          default: []
+          description: |
+            Seed IP addresses or CIDR ranges known to be CDE. The scope engine
+            propagates CDE status to connected subnets transitively.
+        subnet_classifications:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [cde, connected, out_of_scope, pending]
+          default: {}
+          description: |
+            Manual overrides for specific subnets/IPs. Applied after automated
+            scope propagation. Keys are IP/CIDR strings.
+
+    AnswersRequest:
+      type: object
+      required: [answers]
+      properties:
+        answers:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Map of question ID → answer string. Merged with existing answers and
+            used to re-derive CDE seeds and re-run gap analysis.
+
+    ScopeNode:
+      type: object
+      properties:
+        ip:
+          type: string
+          description: IP address or CIDR block
+        scope_status:
+          type: string
+          enum: [cde, connected, security_providing, out_of_scope, unknown]
+        label:
+          type: string
+        rule_ids:
+          type: array
+          items:
+            type: string
+
+    GapFinding:
+      type: object
+      properties:
+        severity:
+          $ref: "#/components/schemas/GapSeverity"
+        requirement:
+          type: string
+          description: PCI DSS v4.0 requirement reference (e.g. "1.3.2")
+        title:
+          type: string
+        affected_rules:
+          type: array
+          items:
+            type: string
+        remediation:
+          type: string
+
+    AnalysisQuestion:
+      type: object
+      properties:
+        id:
+          type: string
+        text:
+          type: string
+        type:
+          type: string
+          description: Question type (e.g. yes_no, ip_list)
+
+    FirewallAnalysisOut:
+      type: object
+      required: [id, upload_id, assessment_id, cde_seeds, scope_nodes, questions, answers, gap_findings, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        upload_id:
+          type: string
+          format: uuid
+        assessment_id:
+          type: string
+          format: uuid
+        cde_seeds:
+          type: array
+          items:
+            type: string
+        scope_nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScopeNode"
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnalysisQuestion"
+          description: Clarifying questions generated by the gap engine
+        answers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Accumulated question answers
+        gap_findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/GapFinding"
+        created_at:
+          type: string
+          format: date-time
+
+    # ------------------------------------------------------------------
+    # Errors
+    # ------------------------------------------------------------------
+    ErrorDetail:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          oneOf:
+            - type: string
+            - type: object
+            - type: array
+              items: {}
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ====================================================================
+  # Health
+  # ====================================================================
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  # ====================================================================
+  # Auth
+  # ====================================================================
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: Get current identity
+      description: Validates the bearer token and returns the caller's role and tenant context.
+      responses:
+        "200":
+          description: Token is valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/auth/tenants:
+    get:
+      tags: [auth]
+      summary: List all tenants
+      description: Admin only. Returns all registered tenants ordered by creation date.
+      responses:
+        "200":
+          description: List of tenants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TenantOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "403":
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+    post:
+      tags: [auth]
+      summary: Create a tenant
+      description: Admin only. Creates a new tenant with a unique slug.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantCreate"
+      responses:
+        "201":
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "403":
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "409":
+          description: Tenant slug already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/auth/tokens:
+    post:
+      tags: [auth]
+      summary: Issue a tenant JWT
+      description: |
+        Admin only. Issues a short-lived JWT for the specified tenant.
+        The token should be handed to the tenant and used as the bearer token
+        for all subsequent API calls.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "403":
+          description: Admin access required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  # ====================================================================
+  # Assessments
+  # ====================================================================
+  /api/assessments/:
+    get:
+      tags: [assessments]
+      summary: List assessments
+      description: |
+        Returns assessments scoped to the caller's tenant. Admins see all assessments
+        across all tenants ordered by creation date descending.
+      responses:
+        "200":
+          description: List of assessments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssessmentOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+    post:
+      tags: [assessments]
+      summary: Create an assessment
+      description: |
+        Tenant callers: `tenant_id` is derived from the token automatically.
+        Admin callers: must supply `tenant_id` in the request body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssessmentCreate"
+      responses:
+        "201":
+          description: Assessment created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssessmentOut"
+        "400":
+          description: Admin must supply tenant_id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [assessments]
+      summary: Get an assessment
+      responses:
+        "200":
+          description: Assessment details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssessmentOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found (or belongs to a different tenant)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+    delete:
+      tags: [assessments]
+      summary: Delete an assessment
+      description: Cascades to assets, reports, and firewall data.
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  # ====================================================================
+  # Assets
+  # ====================================================================
+  /api/assessments/{assessment_id}/assets/:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [assets]
+      summary: List assets
+      description: Returns all assets for the assessment ordered by creation date ascending.
+      responses:
+        "200":
+          description: List of assets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssetOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+    post:
+      tags: [assets]
+      summary: Create an asset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetCreate"
+      responses:
+        "201":
+          description: Asset created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}/assets/bulk:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    post:
+      tags: [assets]
+      summary: Bulk create assets
+      description: Creates multiple assets in a single transaction.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/AssetCreate"
+      responses:
+        "201":
+          description: Assets created
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssetOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}/assets/csv-template:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [assets]
+      summary: Download CSV import template
+      description: |
+        Returns a pre-filled CSV template with headers, instructions, and one example row.
+        Use this as the starting point for bulk asset imports via `POST /csv-import`.
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}/assets/csv-import:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    post:
+      tags: [assets]
+      summary: Import assets from CSV
+      description: |
+        Parses a CSV file and bulk-creates assets. Lines beginning with `#` are treated
+        as comments and ignored. Returns `422` with a detailed `errors` array if any row
+        fails validation — no assets are created unless all rows are valid.
+
+        Required CSV columns: `name`, `ip_address`, `hostname`, `asset_type`, `scope_status`,
+        `is_cde`, `stores_pan`, `processes_pan`, `transmits_pan`, `segmentation_notes`,
+        `justification`, `tags` (semicolon-separated).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Assets created
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AssetOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "422":
+          description: Validation errors (row-level detail in `errors` array)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: object
+                    properties:
+                      errors:
+                        type: array
+                        items:
+                          type: string
+
+  /api/assessments/{assessment_id}/assets/{asset_id}:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: asset_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [assets]
+      summary: Get an asset
+      responses:
+        "200":
+          description: Asset details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Asset or assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+    patch:
+      tags: [assets]
+      summary: Update an asset
+      description: Partial update — only supplied fields are changed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssetUpdate"
+      responses:
+        "200":
+          description: Updated asset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssetOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Asset or assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+    delete:
+      tags: [assets]
+      summary: Delete an asset
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Asset or assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  # ====================================================================
+  # Reports
+  # ====================================================================
+  /api/assessments/{assessment_id}/reports/:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    post:
+      tags: [reports]
+      summary: Generate a scope report
+      description: |
+        Runs the scope report builder over all current assets in the assessment and
+        persists the result. Returns the report object including a `summary` with
+        asset counts per scope status and a `report_json` with the full structured payload.
+      responses:
+        "201":
+          description: Report generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+    get:
+      tags: [reports]
+      summary: List reports
+      description: Returns all reports for the assessment ordered by generation time descending.
+      responses:
+        "200":
+          description: List of reports
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReportOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}/reports/{report_id}/pdf:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: report_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [reports]
+      summary: Download report as PDF
+      description: Generates and streams a PDF version of the scope report.
+      responses:
+        "200":
+          description: PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Report or assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  # ====================================================================
+  # Firewall
+  # ====================================================================
+  /api/assessments/{assessment_id}/firewall/upload:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    post:
+      tags: [firewall]
+      summary: Upload and parse a firewall config
+      description: |
+        Accepts a plain-text firewall configuration file (max 10 MB). The vendor is
+        auto-detected from the filename and file content. Supported vendors:
+        Fortinet/FortiGate, Cisco ASA, Palo Alto / Panorama, iptables / nftables.
+
+        On success the config is parsed into normalised `FirewallRule` rows stored in
+        the database, and the upload object is returned.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Plain-text firewall configuration file
+      responses:
+        "201":
+          description: Upload created and parsed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FirewallUploadOut"
+        "400":
+          description: Could not decode file as text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "413":
+          description: File too large (max 10 MB)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "422":
+          description: Config parse failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}/firewall/uploads:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [firewall]
+      summary: List firewall uploads
+      description: Returns all uploads for the assessment ordered by creation date descending.
+      responses:
+        "200":
+          description: List of uploads
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FirewallUploadOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}/firewall/uploads/{upload_id}/rules:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: upload_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [firewall]
+      summary: List parsed firewall rules
+      description: Returns the normalised rules extracted from the specified upload.
+      responses:
+        "200":
+          description: List of rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FirewallRuleOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Upload or assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}/firewall/analyze:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    post:
+      tags: [firewall]
+      summary: Run scope classification and gap analysis
+      description: |
+        Classifies every IP/subnet reachable from the specified upload's rules relative
+        to the provided CDE seeds, then runs the gap engine to identify PCI DSS v4.0
+        compliance gaps. If an analysis already exists for the upload it is replaced.
+
+        The response includes:
+        - `scope_nodes` — every IP/CIDR with its computed scope status
+        - `questions` — clarifying questions the gap engine needs answered
+        - `gap_findings` — findings already derivable without answers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeRequest"
+      responses:
+        "201":
+          description: Analysis created or replaced
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FirewallAnalysisOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Upload or assessment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}/firewall/analysis:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [firewall]
+      summary: Get latest firewall analysis
+      description: Returns the most recent analysis for the assessment.
+      responses:
+        "200":
+          description: Analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FirewallAnalysisOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: No analysis found for this assessment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}/firewall/analysis/answers:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    patch:
+      tags: [firewall]
+      summary: Submit question answers
+      description: |
+        Merges the provided answers into the existing answer set, extracts any new
+        CDE seeds implied by the answers, and re-runs scope classification and gap
+        analysis. Returns the updated analysis object.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnswersRequest"
+      responses:
+        "200":
+          description: Updated analysis
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FirewallAnalysisOut"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: No analysis found for this assessment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/assessments/{assessment_id}/firewall/export/csv:
+    parameters:
+      - name: assessment_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [firewall]
+      summary: Export analysis as CSV
+      description: |
+        Streams a CSV file containing two sections:
+        1. **Scope Classification** — all scope nodes with IP, status, label, and rule references
+        2. **Gap Analysis Findings** — all gap findings with severity, PCI requirement, title,
+           affected rules, and remediation guidance
+      responses:
+        "200":
+          description: CSV file
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: No analysis found for this assessment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
