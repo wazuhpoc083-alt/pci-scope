@@ -199,7 +199,11 @@ export default function FirewallAnalysis({ assessmentId }: Props) {
           </div>
 
           {activeTab === "scope" && (
-            <ScopeSummary nodes={analysis.scope_nodes} seeds={analysis.cde_seeds} />
+            <ScopeSummary
+              nodes={analysis.scope_nodes}
+              seeds={analysis.cde_seeds}
+              assessmentId={assessmentId}
+            />
           )}
           {activeTab === "diagram" && upload && (
             <NetworkDiagram upload={upload} rules={rules} analysis={analysis} />

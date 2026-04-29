@@ -94,6 +94,10 @@ export const assetsApi = {
       })
       .then((r) => r.data);
   },
+  bulkCreate: (assessmentId: string, assets: Partial<Asset>[]) =>
+    api
+      .post<Asset[]>(`/api/assessments/${assessmentId}/assets/bulk`, assets)
+      .then((r) => r.data),
 };
 
 export const reportsApi = {
